@@ -3,9 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import secrets
 from datetime import datetime
 from typing import Optional
+
+_EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+_NAME_RE  = re.compile(r"^[가-힣a-zA-Z]{2,20}$")
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -80,6 +84,12 @@ def login_action(
     name: Optional[str] = Form(None),
 ):
     email_l = email.strip().lower()
+
+    if not _EMAIL_RE.match(email_l):
+        return _render(request, "login.html", {"error": "올바른 이메일 형식을 입력해 주세요."})
+
+    if name and not _NAME_RE.match(name.strip()):
+        return _render(request, "login.html", {"error": "이름은 한글 또는 영문 2~20자만 입력 가능합니다."})
 
     user = get_user_by_email(email_l)
 
