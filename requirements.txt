@@ -1,0 +1,22 @@
+langchain
+langchain-google-genai
+langchain-chroma
+langgraph
+python-dotenv
+fastapi
+uvicorn
+jinja2
+aiofiles
+
+# 문서/파일 추출 기능
+pypdf
+python-docx
+openpyxl
+python-pptx
+
+boto3
+passlib
+python-multipart
+itsdangerous
+langgraph-checkpoint
+slowapi

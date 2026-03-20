@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>홈 | AI 어시스턴트</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <style>
+    .home-shell {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 48px 20px;
+    }
+
+    .home-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+      margin-bottom: 36px;
+    }
+
+    .user-card {
+      background: var(--surface-strong);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 24px 28px;
+      margin-bottom: 32px;
+    }
+
+    .user-greeting {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .user-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 24px;
+      font-size: 13px;
+      color: var(--text-dim);
+    }
+
+    .user-meta span strong {
+      color: var(--text);
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dim);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+
+    .menu-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-bottom: 32px;
+    }
+
+    @media (max-width: 560px) {
+      .menu-grid { grid-template-columns: 1fr; }
+    }
+
+    .menu-card {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface-strong);
+      text-decoration: none;
+      color: var(--text);
+      transition: border-color 0.2s, transform 0.2s, background 0.2s;
+    }
+
+    .menu-card:hover {
+      border-color: rgba(87, 208, 255, 0.5);
+      background: rgba(15, 35, 60, 0.95);
+      transform: translateY(-2px);
+    }
+
+    .menu-icon { font-size: 26px; line-height: 1; }
+    .menu-label { font-size: 15px; font-weight: 700; margin-top: 4px; }
+    .menu-desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+    .recent-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .recent-table th {
+      text-align: left;
+      padding: 8px 12px;
+      color: var(--text-dim);
+      font-weight: 600;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .recent-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      color: var(--text);
+    }
+
+    .recent-table tr:last-child td { border-bottom: none; }
+
+    .task-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      background: rgba(87, 208, 255, 0.12);
+      color: rgba(87, 208, 255, 0.9);
+    }
+
+    .empty-recent {
+      color: var(--text-dim);
+      font-size: 13px;
+      padding: 12px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="home-shell">
+    <div class="home-header">
+      <div>
+        <p class="eyebrow">AI Workspace</p>
+        <h1 class="panel-title">홈</h1>
+      </div>
+      <div class="topbar-actions">
+        {% if user and user.is_admin %}
+          <a href="/admin" class="admin-btn">관리자 페이지</a>
+        {% endif %}
+        <a href="/logout" class="logout-btn">로그아웃</a>
+      </div>
+    </div>
+
+    <!-- 사용자 정보 카드 -->
+    <div class="user-card">
+      <div class="user-greeting">{{ user.name }}님, 안녕하세요.</div>
+      <div class="user-meta">
+        <span>이메일 <strong>{{ user.email }}</strong></span>
+        <span>소속 <strong>{{ user.department or '미지정' }}</strong></span>
+        <span>마지막 로그인 <strong>{{ last_login_str }}</strong></span>
+      </div>
+    </div>
+
+    <!-- 서비스 바로가기 -->
+    <p class="section-title">서비스</p>
+    <a href="/chat" class="menu-card" style="display:flex; flex-direction:row; align-items:center; gap:20px; padding:28px 32px; margin-bottom:32px;">
+      <div class="menu-icon" style="font-size:36px;">🤖</div>
+      <div>
+        <div class="menu-label" style="font-size:18px;">사무 보조 AI 어시스턴트</div>
+        <div class="menu-desc">질문, 문서 검색, 이메일·RFP 초안 작성, 파일 분석을 도와드립니다</div>
+      </div>
+    </a>
+
+    <!-- 최근 이용 내역 -->
+    <p class="section-title">최근 이용 내역</p>
+    {% if recent_logs %}
+    <table class="recent-table">
+      <thead>
+        <tr>
+          <th>시각</th>
+          <th>질문</th>
+          <th>분류</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in recent_logs %}
+        <tr>
+          <td style="white-space:nowrap; color:var(--text-dim);">{{ log.ts_str }}</td>
+          <td>{{ log.input_text[:60] }}{% if log.input_text|length > 60 %}…{% endif %}</td>
+          <td><span class="task-badge">{{ log.final_task }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty-recent">아직 이용 내역이 없습니다.</p>
+    {% endif %}
+  </div>
+</body>
+</html>

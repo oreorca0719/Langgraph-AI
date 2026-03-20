@@ -1,0 +1,36 @@
+# 환경변수 (민감 정보)
+.env
+
+# 벡터 DB (재배포 시 자동 재구성)
+chroma_db/
+
+# 로컬 지식 베이스 (운영 전환 시 삭제 예정)
+knowledge_data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# 로그
+server.log
+uvicorn.log
+
+# 테스트 결과
+test_result.json
+
+# Claude Code 설정
+.claude/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

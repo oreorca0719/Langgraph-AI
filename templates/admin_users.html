@@ -1,0 +1,95 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>관리자 | 사용자 관리</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body class="page-admin">
+  <main class="panel admin-panel">
+    <header class="admin-header">
+      <div>
+        <p class="eyebrow">Admin Console</p>
+        <h1 class="panel-title">사용자 관리</h1>
+        <p class="panel-subtitle">관리자: <strong>{{ user.email }}</strong></p>
+      </div>
+      <div class="topbar-actions">
+        <a href="/admin" class="admin-btn">Admin 홈</a>
+        <a href="/" class="admin-btn">메인으로</a>
+        <a href="/logout" class="logout-btn">로그아웃</a>
+      </div>
+    </header>
+
+    <div class="table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>이메일</th>
+            <th>이름</th>
+            <th>소속</th>
+            <th>승인</th>
+            <th>관리자</th>
+            <th>액션</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td>{{ u.email }}</td>
+            <td>{{ u.name }}</td>
+            <td>
+              <form method="post" action="/admin/users/set-department" class="inline-form">
+                <input type="hidden" name="email" value="{{ u.email }}" />
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+                <input type="text" name="department" value="{{ u.department or '' }}" placeholder="소속 입력" style="width:100px;" />
+                <button type="submit">저장</button>
+              </form>
+            </td>
+            <td>{{ u.approved }}</td>
+            <td>{{ u.is_admin }}</td>
+            <td class="actions-cell">
+              {% if not u.approved %}
+              <form method="post" action="/admin/users/approve" class="inline-form">
+                <input type="hidden" name="email" value="{{ u.email }}" />
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+                <button type="submit">승인</button>
+              </form>
+              {% else %}
+              <form method="post" action="/admin/users/reject" class="inline-form">
+                <input type="hidden" name="email" value="{{ u.email }}" />
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+                <button type="submit">승인해제</button>
+              </form>
+              {% endif %}
+
+              {% if u.is_admin %}
+              <form method="post" action="/admin/users/toggle-admin" class="inline-form">
+                <input type="hidden" name="email" value="{{ u.email }}" />
+                <input type="hidden" name="make_admin" value="0" />
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+                <button type="submit">관리자해제</button>
+              </form>
+              {% else %}
+              <form method="post" action="/admin/users/toggle-admin" class="inline-form">
+                <input type="hidden" name="email" value="{{ u.email }}" />
+                <input type="hidden" name="make_admin" value="1" />
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+                <button type="submit">관리자부여</button>
+              </form>
+              {% endif %}
+
+              <form method="post" action="/admin/users/delete" class="inline-form" onsubmit="return confirm('정말 삭제하시겠습니까? ({{ u.email }})');">
+                <input type="hidden" name="email" value="{{ u.email }}" />
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+                <button type="submit" class="danger-btn">삭제</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,33 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>로그인 | LangGraph RAG</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body class="page-auth">
+  <main class="panel auth-panel">
+    <p class="eyebrow">Secure Access</p>
+    <h1 class="panel-title">로그인 / 가입</h1>
+    <p class="panel-subtitle">최초 로그인 시 계정이 생성되며, 관리자 승인 후 이용할 수 있습니다.</p>
+
+    {% if error %}
+      <div class="alert error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/login" class="form-stack">
+      <label class="field-label" for="email">이메일</label>
+      <input id="email" name="email" type="email" required />
+
+      <label class="field-label" for="password">비밀번호</label>
+      <input id="password" name="password" type="password" required />
+
+      <label class="field-label" for="name">이름 (선택)</label>
+      <input id="name" name="name" type="text" />
+
+      <button type="submit" class="primary-btn">계속</button>
+    </form>
+  </main>
+</body>
+</html>
