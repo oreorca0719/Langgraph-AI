@@ -124,11 +124,13 @@ def build_chat_subgraph():
             "4) 범위 외 질문 처리 원칙:\n"
             "   - 날씨, 주식, 스포츠 결과, 개인 일정 등 사내 업무와 무관한 질문은 도구를 호출하지 말고,\n"
             "     '해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.'라고 안내하세요.\n"
-            "5) 인용 원칙 (매우 중요):\n"
-            "   - 도구에서 가져온 내용은 가능한 한 원문 표현을 그대로 유지하세요.\n"
-            "   - 임의로 요약하거나 재구성하지 마세요. 원문에 있는 수치, 날짜, 고유명사는 반드시 원문 그대로 사용하세요.\n"
+            "5) 응답 길이 원칙:\n"
+            "   - 검색된 내용이 방대하더라도 사용자의 질문에 필요한 핵심만 요약하여 답하세요.\n"
+            "   - 원문을 그대로 나열하지 마세요. 반드시 사용자 질문 중심으로 재구성하세요.\n"
+            "6) 인용 원칙:\n"
+            "   - 원문에 있는 수치, 날짜, 고유명사는 반드시 원문 그대로 사용하세요.\n"
             "   - 문장 끝에 [1], [2] 형식으로 출처를 표시하세요.\n"
-            "6) 정중한 비즈니스 어투로 답하고, 가독성을 위해 불렛(•)을 활용하세요.\n"
+            "7) 정중한 비즈니스 어투로 답하고, 가독성을 위해 불렛(•)을 활용하세요.\n"
         )
 
         tools = [search_knowledge_base, get_attached_file]
@@ -142,6 +144,18 @@ def build_chat_subgraph():
 
         result = agent.invoke(agent_input)
         final_message = result["messages"][-1]
+
+        # 토큰 초과 감지: finish_reason이 MAX_TOKENS이면 안내 메시지로 대체
+        finish_reason = (
+            (getattr(final_message, "response_metadata", None) or {}).get("finish_reason", "")
+            or ""
+        ).upper()
+        if finish_reason == "MAX_TOKENS":
+            from langchain_core.messages import AIMessage
+            final_message = AIMessage(
+                content="요청하신 내용이 처리 가능한 텍스트 범위를 초과하였습니다. "
+                        "질문을 더 구체적으로 나누어 입력해 주세요."
+            )
 
         response_len = len(str(final_message.content))
         print(f"DEBUG: [Chat Agent] 응답 생성 완료 ({response_len}자)")

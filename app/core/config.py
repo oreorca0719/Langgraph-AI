@@ -28,11 +28,18 @@ def _ensure_google_api_key_env() -> None:
         os.environ["GOOGLE_API_KEY"] = gemini_key
 
 
+LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4096"))
+
+
 def get_llm(model_name: str | None = None) -> ChatGoogleGenerativeAI:
     _ensure_google_api_key_env()
     model = model_name or os.getenv("LLM_MODEL", "gemini-3-flash-preview")
     temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
-    return ChatGoogleGenerativeAI(model=model, temperature=temperature)
+    return ChatGoogleGenerativeAI(
+        model=model,
+        temperature=temperature,
+        max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
+    )
 
 
 # ──────────────────────────────────────────────
