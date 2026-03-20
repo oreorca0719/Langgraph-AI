@@ -63,7 +63,8 @@ Langgraph-Rag/
 ├── main.py                        # FastAPI 앱 엔트리포인트
 ├── requirements.txt
 ├── Dockerfile
-├── apprunner.yaml
+├── .dockerignore
+├── .github/workflows/deploy.yml  # CI/CD 파이프라인
 │
 ├── app/
 │   ├── auth/
@@ -167,11 +168,35 @@ uvicorn main:app --reload --port 8000
 
 ---
 
-## 배포 (AWS App Runner)
+## 배포 파이프라인
 
-1. Docker 이미지 빌드 및 ECR 푸시
-2. App Runner 서비스에서 새 이미지 배포
-3. 환경변수는 App Runner 서비스 설정에서 관리
+`main` 브랜치에 push하면 GitHub Actions가 자동으로 빌드~배포까지 처리합니다.
+
+```
+git push origin main
+      │
+      ▼
+GitHub Actions (.github/workflows/deploy.yml)
+      │
+      ├── 1. AWS 인증 (IAM 액세스 키)
+      ├── 2. Docker 이미지 빌드
+      ├── 3. Amazon ECR 푸시 (커밋 해시 태그 + latest 태그)
+      │
+      ▼
+App Runner 새 이미지 감지 → 자동 재배포
+```
+
+**GitHub Secrets 설정 필요** (레포 → Settings → Secrets and variables → Actions)
+
+| Secret | 설명 |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | IAM 사용자 액세스 키 |
+| `AWS_SECRET_ACCESS_KEY` | IAM 사용자 시크릿 키 |
+| `AWS_REGION` | `ap-northeast-1` |
+| `ECR_REPOSITORY` | ECR 레포지토리 이름 |
+| `APP_RUNNER_SERVICE_ARN` | App Runner 서비스 ARN |
+
+**환경변수**는 App Runner 콘솔 서비스 설정에서 별도 관리합니다. `.env`는 배포 이미지에 포함되지 않습니다.
 
 ---
 
