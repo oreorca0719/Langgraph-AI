@@ -2,6 +2,7 @@
 
 사내 업무 보조 AI 어시스턴트 — LangGraph + RAG 기반 FastAPI 백엔드
 
+개발자: 김범준
 ---
 
 ## 개요
