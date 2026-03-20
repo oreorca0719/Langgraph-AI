@@ -13,7 +13,7 @@ from typing import Any, Dict, Tuple
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from app.core.config import get_llm
+from app.core.config import get_llm, LLM_FALLBACK_ENABLED, LLM_FALLBACK_TIMEOUT_SEC
 
 _ALLOWED = {"chat", "email_draft", "file_extract", "rfp_draft"}
 _CONFIDENCE_MIN = 0.7  # 이 값 미만이면 unknown으로 처리
@@ -43,11 +43,10 @@ def llm_intent_fallback(user_input: str) -> Tuple[str, Dict[str, Any]]:
     Returns:
         (task, debug_dict) — task는 _ALLOWED 중 하나 또는 'unknown'
     """
-    enabled = (os.getenv("LLM_FALLBACK_ENABLED", "1") or "1").strip()
-    if enabled in ("0", "false", "False", "NO", "no"):
+    if LLM_FALLBACK_ENABLED.strip() in ("0", "false", "False", "NO", "no"):
         return "unknown", {"invoked": False, "reason": "disabled"}
 
-    timeout_sec = float(os.getenv("LLM_FALLBACK_TIMEOUT_SEC", "8"))
+    timeout_sec = LLM_FALLBACK_TIMEOUT_SEC
 
     def _call() -> Dict[str, Any]:
         chain = _PROMPT | get_llm() | JsonOutputParser()

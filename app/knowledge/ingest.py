@@ -10,13 +10,21 @@ from typing import Dict, List, Tuple
 
 from langchain_chroma import Chroma
 
-from app.core.config import get_embeddings
+from app.core.config import (
+    get_embeddings,
+    KNOWLEDGE_DIR as _KNOWLEDGE_DIR,
+    AUTO_INGEST,
+    S3_KNOWLEDGE_BUCKET,
+    S3_KNOWLEDGE_PREFIX,
+    CHROMA_DB_PATH,
+    CHROMA_COLLECTION,
+    INGEST_CHUNK_MAX_CHARS,
+)
 
 # 지원 형식 (file_extractor와 동일 셋)
 _SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf", ".docx", ".xlsx", ".xlsm", ".pptx"}
 
-# 청킹 파라미터 (환경변수로 조정 가능)
-_CHUNK_MAX_CHARS = int(os.getenv("INGEST_CHUNK_MAX_CHARS", "600"))
+_CHUNK_MAX_CHARS = INGEST_CHUNK_MAX_CHARS
 _STATE_FILE = ".ingest_state.json"
 
 
@@ -101,11 +109,11 @@ def _save_state(knowledge_dir: Path, state: Dict) -> None:
 # ──────────────────────────────────────────────
 
 def _sync_from_s3(knowledge_dir: Path) -> None:
-    bucket = (os.getenv("S3_KNOWLEDGE_BUCKET") or "").strip()
+    bucket = S3_KNOWLEDGE_BUCKET.strip()
     if not bucket:
         return
 
-    prefix = (os.getenv("S3_KNOWLEDGE_PREFIX") or "knowledge_data/").strip()
+    prefix = S3_KNOWLEDGE_PREFIX.strip()
     if not prefix.endswith("/"):
         prefix += "/"
 
@@ -145,18 +153,18 @@ def auto_ingest_if_enabled() -> None:
     2. 파일 해시 비교 — 변경된 파일만 Chroma 재적재
     3. 삭제된 파일의 청크는 Chroma에서 제거
     """
-    enabled = (os.getenv("AUTO_INGEST", "1") or "").strip() in ("1", "true", "True", "YES", "yes")
+    enabled = (AUTO_INGEST or "").strip() in ("1", "true", "True", "YES", "yes")
     if not enabled:
         return
 
-    knowledge_dir = Path(os.getenv("KNOWLEDGE_DIR", "./knowledge_data"))
+    knowledge_dir = Path(_KNOWLEDGE_DIR)
     _sync_from_s3(knowledge_dir)
 
     if not knowledge_dir.exists() or not knowledge_dir.is_dir():
         return
 
-    db_path = os.getenv("CHROMA_DB_PATH", "./chroma_db")
-    collection = os.getenv("CHROMA_COLLECTION", "my_knowledge")
+    db_path = CHROMA_DB_PATH
+    collection = CHROMA_COLLECTION
     embeddings = get_embeddings()
     vectorstore = Chroma(
         persist_directory=db_path,

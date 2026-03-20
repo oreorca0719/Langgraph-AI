@@ -10,24 +10,24 @@ from langchain_core.tools import tool
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import create_react_agent
 
-from app.core.config import get_embeddings, get_llm
+from app.core.config import (
+    get_embeddings, get_llm,
+    CHROMA_DB_PATH, CHROMA_COLLECTION,
+    RETRIEVAL_MIN_RELEVANCE, RETRIEVAL_MAX_DISTANCE, RETRIEVAL_TOP_K,
+)
 from app.core import trace_buffer
 from app.graph.states.state import GraphState
 
 
-CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "./chroma_db")
-CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "my_knowledge")
-
-
-def _search_chroma(query: str, k: int = 3) -> List[Document]:
+def _search_chroma(query: str, k: int = RETRIEVAL_TOP_K) -> List[Document]:
     embeddings = get_embeddings()
     vectorstore = Chroma(
         persist_directory=CHROMA_DB_PATH,
         embedding_function=embeddings,
         collection_name=CHROMA_COLLECTION,
     )
-    min_relevance = float(os.getenv("RETRIEVAL_MIN_RELEVANCE", "0.65"))
-    max_distance = float(os.getenv("RETRIEVAL_MAX_DISTANCE", "0.75"))
+    min_relevance = RETRIEVAL_MIN_RELEVANCE
+    max_distance = RETRIEVAL_MAX_DISTANCE
 
     if hasattr(vectorstore, "similarity_search_with_relevance_scores"):
         pairs = vectorstore.similarity_search_with_relevance_scores(query, k=k)
@@ -68,7 +68,7 @@ def build_chat_subgraph():
         chat_history = list(state.get("messages") or [])
         file_context = (state.get("file_context") or "").strip()
         file_context_name = (state.get("file_context_name") or "첨부 파일").strip()
-        k = int(os.getenv("RETRIEVAL_TOP_K", "3"))
+        k = RETRIEVAL_TOP_K
 
         trace_buffer.push(trace_id, node="chat_agent", event="enter", label="execute",
                           data={"input": user_input[:200], "has_file": bool(file_context)})

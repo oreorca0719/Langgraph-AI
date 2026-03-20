@@ -6,7 +6,7 @@ import re
 import threading
 from typing import Any, Dict, List, Tuple
 
-from app.core.config import get_embeddings
+from app.core.config import get_embeddings, ROUTER_TOP1_MIN, ROUTER_MARGIN_MIN
 from app.core import trace_buffer
 from app.graph.states.state import GraphState
 from app.graph.nodes.llm_intent_fallback import llm_intent_fallback
@@ -141,8 +141,8 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
     top2_score = ranked[1][1] if len(ranked) > 1 else -1.0
     margin = top1_score - top2_score
 
-    top1_min = float(os.getenv("ROUTER_TOP1_MIN", "0.62"))
-    margin_min = float(os.getenv("ROUTER_MARGIN_MIN", "0.08"))
+    top1_min = ROUTER_TOP1_MIN
+    margin_min = ROUTER_MARGIN_MIN
 
     decision = top1_task
 
