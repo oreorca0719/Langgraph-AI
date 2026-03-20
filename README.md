@@ -28,8 +28,8 @@
 
 - **Backend**: FastAPI, Python 3.11
 - **AI Orchestration**: LangGraph (`StateGraph`, `MemorySaver`)
-- **LLM**: Google Gemini (`gemini-2.5-flash-preview-04-17`)
-- **Embedding**: Google `text-multilingual-embedding-002`
+- **LLM**: Google Gemini (`gemini-3-flash-preview`)
+- **Embedding**: Google `gemini-embedding-001`
 - **Vector DB**: Chroma (로컬 영속 스토리지)
 - **Document Store**: Amazon DynamoDB (ap-northeast-1)
 - **Auth**: 세션 쿠키 + CSRF 토큰
