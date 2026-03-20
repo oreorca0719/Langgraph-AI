@@ -20,8 +20,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
+from app.checkpointer.dynamo_checkpointer import DynamoDBCheckpointer, ensure_checkpoints_table
 
 from app.core.config import has_gemini_api_key
 from app.graph.nodes.task_router import task_router_node, route_by_task
@@ -47,7 +47,7 @@ from app.auth.intent_samples import ensure_intent_samples_table, seed_intent_sam
 # =========================
 # LangGraph 구성 (Subgraph 기반)
 # =========================
-memory = MemorySaver()
+memory = DynamoDBCheckpointer()
 
 workflow = StateGraph(GraphState)
 
@@ -139,6 +139,7 @@ async def lifespan(app: FastAPI):
     ensure_users_table_if_enabled()
     ensure_routing_log_table()
     ensure_intent_samples_table()
+    ensure_checkpoints_table()
     seed_intent_samples()
     ensure_initial_admin()
     auto_ingest_if_enabled()
@@ -347,11 +348,16 @@ async def chat_endpoint(request: Request):
     # -------------------------
     # 3) 새 메시지마다 초기값 + 사용자 입력 주입
     # -------------------------
+    preview_debug = (preview.get("task_args") or {}).get("routing_debug", {})
     inputs = {
         "trace_id": trace_id,
         "input_data": user_input,
         "task_type": "",
-        "task_args": {"_trace_label": "execute"},
+        "task_args": {
+            "_trace_label": "execute",
+            "task_type": effective_task,
+            "routing_debug": preview_debug,
+        },
     }
 
     if previous_task and previous_task != effective_task:

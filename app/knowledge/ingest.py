@@ -43,6 +43,25 @@ def _extract_text(p: Path) -> str:
     return text.strip()
 
 
+def _extract_pdf_pages(p: Path) -> List[Tuple[int, str]]:
+    """PDF를 페이지 단위로 추출. [(1-indexed page_num, text), ...] 반환."""
+    try:
+        from pypdf import PdfReader  # type: ignore
+    except Exception as e:
+        raise RuntimeError(f"PDF 추출을 위해 pypdf가 필요합니다: {e}")
+
+    reader = PdfReader(str(p))
+    result: List[Tuple[int, str]] = []
+    for i, page in enumerate(reader.pages, start=1):
+        try:
+            text = (page.extract_text() or "").strip()
+        except Exception:
+            text = ""
+        if text:
+            result.append((i, text))
+    return result
+
+
 # ──────────────────────────────────────────────
 # 청킹
 # ──────────────────────────────────────────────
@@ -220,17 +239,27 @@ def auto_ingest_if_enabled() -> None:
             except Exception:
                 pass
 
-        # 텍스트 추출
+        # 텍스트 추출 (PDF는 페이지 단위, 나머지는 전체 텍스트)
         try:
-            raw_text = _extract_text(p)
+            if p.suffix.lower() == ".pdf":
+                pages = _extract_pdf_pages(p)
+                chunks: List[str] = []
+                page_numbers: List[int] = []
+                for page_num, page_text in pages:
+                    for chunk in _chunk_text(page_text):
+                        chunks.append(chunk)
+                        page_numbers.append(page_num)
+            else:
+                raw_text = _extract_text(p)
+                chunks = _chunk_text(raw_text) if raw_text else []
+                page_numbers = [0] * len(chunks)
         except Exception as e:
             print(f"[INGEST] 추출 실패 {rel}: {e}")
             continue
 
-        if not raw_text:
+        if not chunks:
             continue
 
-        chunks = _chunk_text(raw_text)
         chunk_ids = [f"file::{rel}::chunk_{i}" for i in range(len(chunks))]
         metadatas = [
             {
@@ -240,6 +269,7 @@ def auto_ingest_if_enabled() -> None:
                 "display_source": rel,
                 "chunk_index": i,
                 "total_chunks": len(chunks),
+                **({"page_number": page_numbers[i]} if page_numbers[i] else {}),
             }
             for i in range(len(chunks))
         ]

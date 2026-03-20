@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any, Dict, List
 
 from langchain_chroma import Chroma
@@ -18,14 +19,28 @@ from app.core.config import (
 from app.core import trace_buffer
 from app.graph.states.state import GraphState
 
+HISTORY_MAX_MESSAGES = int(os.getenv("HISTORY_MAX_MESSAGES", "40"))
+
+# ── Chroma 싱글톤 ──
+_chroma_instance: Chroma | None = None
+_chroma_lock = threading.Lock()
+
+
+def _get_chroma() -> Chroma:
+    global _chroma_instance
+    if _chroma_instance is None:
+        with _chroma_lock:
+            if _chroma_instance is None:
+                _chroma_instance = Chroma(
+                    persist_directory=CHROMA_DB_PATH,
+                    embedding_function=get_embeddings(),
+                    collection_name=CHROMA_COLLECTION,
+                )
+    return _chroma_instance
+
 
 def _search_chroma(query: str, k: int = RETRIEVAL_TOP_K) -> List[Document]:
-    embeddings = get_embeddings()
-    vectorstore = Chroma(
-        persist_directory=CHROMA_DB_PATH,
-        embedding_function=embeddings,
-        collection_name=CHROMA_COLLECTION,
-    )
+    vectorstore = _get_chroma()
     min_relevance = RETRIEVAL_MIN_RELEVANCE
     max_distance = RETRIEVAL_MAX_DISTANCE
 
@@ -48,7 +63,9 @@ def _format_search_result(docs: List[Document]) -> str:
         text = (d.page_content or "").strip()
         md = getattr(d, "metadata", {}) or {}
         title = md.get("title") or md.get("file_name") or "문서"
-        blocks.append(f"[{i}] {title}\n{text[:1200]}")
+        page_num = md.get("page_number")
+        location = f" (p.{page_num})" if page_num else ""
+        blocks.append(f"[{i}] {title}{location}\n{text[:1200]}")
     return "\n\n".join(blocks)
 
 
@@ -65,7 +82,7 @@ def build_chat_subgraph():
 
         trace_id = (state.get("trace_id") or "")
         user_input = (state.get("input_data") or "").strip()
-        chat_history = list(state.get("messages") or [])
+        chat_history = list(state.get("messages") or [])[-HISTORY_MAX_MESSAGES:]
         file_context = (state.get("file_context") or "").strip()
         file_context_name = (state.get("file_context_name") or "첨부 파일").strip()
         k = RETRIEVAL_TOP_K
