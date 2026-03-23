@@ -65,7 +65,7 @@ def _render(request: Request, name: str, context: dict) -> HTMLResponse:
     if _templates is None:
         return HTMLResponse("templates not set", status_code=500)
     try:
-        return _templates.TemplateResponse(name, {"request": request, **context})
+        return _templates.TemplateResponse(request, name, {"request": request, **context})
     except TemplateNotFound:
         return HTMLResponse(f"Template not found: {name}", status_code=500)
 

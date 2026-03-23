@@ -236,7 +236,7 @@ async def home(request: Request):
     last_login = full_user.get("updated_at")
     last_login_str = datetime.fromtimestamp(float(last_login)).strftime("%Y-%m-%d %H:%M") if last_login else "-"
 
-    return templates.TemplateResponse("home.html", {
+    return templates.TemplateResponse(request, "home.html", {
         "request": request,
         "user": full_user,
         "recent_logs": recent_logs,
@@ -258,7 +258,7 @@ async def index(request: Request):
             return RedirectResponse(url="/pending", status_code=303)
         raise
 
-    return templates.TemplateResponse("index.html", {"request": request, "user": user})
+    return templates.TemplateResponse(request, "index.html", {"request": request, "user": user})
 
 
 # =========================
