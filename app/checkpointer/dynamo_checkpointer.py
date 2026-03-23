@@ -219,3 +219,10 @@ class DynamoDBCheckpointer(BaseCheckpointSaver):
 
     async def aput_writes(self, config, writes, task_id) -> None:
         pass
+
+    def delete(self, thread_id: str) -> None:
+        """thread_id에 해당하는 체크포인트를 삭제합니다."""
+        try:
+            self._table().delete_item(Key={"thread_id": thread_id})
+        except Exception as e:
+            print(f"[CHECKPOINT] delete 실패 (thread_id={thread_id}): {e}")

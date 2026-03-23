@@ -1,5 +1,8 @@
 // /static/js/chat.js
 
+// 페이지 로드 시 대화 히스토리 초기화
+fetch('/chat/reset', { method: 'POST' });
+
 const chatBox   = document.getElementById('chat-box');
 const userInput = document.getElementById('user-input');
 const sendBtn   = document.getElementById('send-btn');
