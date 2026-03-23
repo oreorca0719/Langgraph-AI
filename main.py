@@ -268,7 +268,7 @@ async def index(request: Request):
 async def chat_reset(request: Request):
     user = get_current_user(request)
     thread_id = str(user.get("user_id") or user.get("email"))
-    checkpointer.delete(thread_id)
+    memory.delete(thread_id)
     return {"ok": True}
 
 
