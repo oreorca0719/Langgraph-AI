@@ -35,6 +35,25 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
+      - name: Wait for App Runner to be RUNNING
+        run: |
+          echo "App Runner 서비스 상태 대기 중..."
+          for i in $(seq 1 20); do
+            STATUS=$(aws apprunner describe-service \
+              --service-arn ${{ secrets.APP_RUNNER_SERVICE_ARN }} \
+              --query "Service.Status" --output text)
+            echo "현재 상태: $STATUS"
+            if [ "$STATUS" = "RUNNING" ]; then
+              echo "RUNNING 상태 확인. 배포 진행."
+              break
+            fi
+            if [ $i -eq 20 ]; then
+              echo "대기 시간 초과 (10분). 배포를 중단합니다."
+              exit 1
+            fi
+            sleep 30
+          done
+
       - name: Deploy to App Runner
         run: |
           aws apprunner start-deployment \
