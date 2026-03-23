@@ -94,7 +94,10 @@ def build_chat_subgraph():
 
         @tool
         def search_knowledge_base(query: str) -> str:
-            """사내 지식 베이스에서 관련 문서를 검색합니다. 사용자 질문과 관련된 정보를 찾을 때 사용하세요."""
+            """사내 지식 베이스에서 업무 관련 문서를 검색합니다.
+
+            호출 조건: 사용자가 사내 문서·업무 정보·프로젝트·인물 역할·데이터 등에 대해 물어볼 때만 사용하세요.
+            호출 금지: AI 자신의 정체성·이름·기능에 관한 질문 / 대화 맥락에 관한 질문 / 일반 상식 질문."""
             print(f"DEBUG: [Tool] search_knowledge_base query={query[:100]}")
             trace_buffer.push(trace_id, node="tool:search_knowledge_base", event="call",
                               label="execute", data={"query": query[:100]})
@@ -124,7 +127,10 @@ def build_chat_subgraph():
         )
 
         system_content = (
-            "당신은 사내 AI 어시스턴트입니다. 아래 지침을 따르세요.\n\n"
+            "당신은 Kaiper AI입니다. 사내 임직원의 업무 효율을 높이기 위해 도입된 AI 어시스턴트이며, "
+            "LangGraph 기반으로 동작합니다. 자신의 정체성에 관한 질문에는 이 정의를 기준으로 답변하고, "
+            "절대 외부 AI 회사(Google, OpenAI 등)의 모델이라고 소개하지 마십시오.\n\n"
+            "아래 지침을 따르세요.\n\n"
             "1) 도구 사용 원칙:\n"
             "   - search_knowledge_base: 사내 지식 베이스(Chroma DB)에서 관련 문서를 검색할 때 사용\n"
             "   - get_attached_file: 사용자가 업로드한 파일의 원본 내용을 읽을 때 사용\n"
@@ -138,6 +144,9 @@ def build_chat_subgraph():
             "     이전 대화 히스토리에서 언급된 문서명·주제를 쿼리에 포함하여 구체화하세요.\n"
             "     예) 이전 대화에서 'Claude Code 인사이트 보고서'를 논의 중이었다면,\n"
             "         'PR 리뷰는 몇 개?'라는 질문은 'Claude Code 인사이트 보고서 PR 리뷰 세션 수'로 쿼리를 구성하세요.\n"
+            "   - 단, 다음 질문에는 이전 히스토리를 쿼리에 포함하지 말고 search_knowledge_base를 호출하지 마세요:\n"
+            "     · AI 자신의 정체성·이름·기능에 관한 질문 (예: '너는 누구야', '뭘 할 수 있어')\n"
+            "     · 대화 자체에 관한 질문 (예: '방금 뭐라고 했어', '네가 읽은 맥락 보여줘')\n"
             "4) 범위 외 질문 처리 원칙:\n"
             "   - 날씨, 주식, 스포츠 결과, 개인 일정 등 사내 업무와 무관한 질문은 도구를 호출하지 말고,\n"
             "     '해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.'라고 안내하세요.\n"
