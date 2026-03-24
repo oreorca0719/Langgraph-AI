@@ -24,7 +24,7 @@ from langgraph.graph import END, StateGraph
 from app.checkpointer.dynamo_checkpointer import DynamoDBCheckpointer, ensure_checkpoints_table
 
 from app.core.config import has_gemini_api_key
-from app.graph.nodes.task_router import task_router_node, route_by_task, preview_route
+from app.graph.nodes.task_router import task_router_node, route_by_task, rejection_node
 from app.security.injection_detector import check as injection_check
 from app.security.content_sanitizer import sanitize as sanitize_content
 from app.security.output_validator import validate as validate_output
@@ -66,6 +66,7 @@ workflow.add_node("file_chat_subgraph", build_chat_subgraph())
 workflow.add_node("file_subgraph", build_file_subgraph())
 workflow.add_node("email_subgraph", build_email_subgraph())
 workflow.add_node("rfp_subgraph", build_rfp_subgraph())
+workflow.add_node("rejection_node", rejection_node)
 
 workflow.set_entry_point("task_router")
 
@@ -80,6 +81,7 @@ workflow.add_conditional_edges(
         "file_extract": "file_subgraph",
         "email_draft": "email_subgraph",
         "rfp_draft": "rfp_subgraph",
+        "rejection": "rejection_node",
     },
 )
 
@@ -90,6 +92,7 @@ workflow.add_edge("file_chat_subgraph", END)
 workflow.add_edge("file_subgraph", END)
 workflow.add_edge("email_subgraph", END)
 workflow.add_edge("rfp_subgraph", END)
+workflow.add_edge("rejection_node", END)
 
 graph_app = workflow.compile(checkpointer=memory)
 
@@ -299,34 +302,17 @@ async def chat_endpoint(request: Request):
         raise HTTPException(status_code=400, detail=f"입력이 너무 깁니다. 최대 {_max_input}자까지 허용됩니다.")
 
     # -------------------------
-    # 1) task_hint 계산 (LLM 호출 및 thread_id 결정용)
+    # 1) 보안 필터 (injection 탐지)
     # -------------------------
-
-    # 체크포인트에서 file_context 존재 여부를 미리 확인 (unknown → chat fallback 판단용)
-    _base_thread_early = str(user.get("user_id") or user.get("email"))
-    _scope_early = (os.getenv("THREAD_CONTEXT_SCOPE", "user") or "user").strip().lower()
-    _early_thread_id = (
-        f"{_base_thread_early}:chat" if _scope_early == "task" else _base_thread_early
-    )
-    _file_context_in_checkpoint = False
-    try:
-        _snap = graph_app.get_state({"configurable": {"thread_id": _early_thread_id}})
-        _snap_values = getattr(_snap, "values", None) or {}
-        _file_context_in_checkpoint = bool((_snap_values.get("file_context") or "").strip())
-    except Exception:
-        pass
-
     trace_id = str(uuid.uuid4())
+    thread_id = str(user.get("user_id") or user.get("email"))
+    config = {"configurable": {"thread_id": thread_id}}
 
-    # ── [1차] 임베딩 유사도 사전 차단 (슬라이딩 윈도우 포함) ──
     try:
         from langchain_core.messages import HumanMessage as _HM
-        _snap_values_for_injection = getattr(
-            graph_app.get_state({"configurable": {"thread_id": _early_thread_id}}),
-            "values", None,
-        ) or {}
+        _snap_values = getattr(graph_app.get_state(config), "values", None) or {}
         _recent_user_turns = [
-            msg.content for msg in (_snap_values_for_injection.get("messages") or [])
+            msg.content for msg in (_snap_values.get("messages") or [])
             if isinstance(msg, _HM) and isinstance(msg.content, str)
         ][-3:]
     except Exception:
@@ -339,80 +325,17 @@ async def chat_endpoint(request: Request):
             "sources": [],
         })
 
-    effective_task, preview_debug = preview_route(user_input, trace_id)
-    effective_task = (effective_task or "knowledge_search").strip() or "knowledge_search"
-
-    # ── [2차] 라우터가 injection / out_of_scope으로 분류한 경우 즉시 차단 ──
-    if effective_task in {"injection", "out_of_scope"}:
-        return JSONResponse({
-            "type": "chat",
-            "answer": "해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
-            "sources": [],
-        })
-
-    # unknown + 파일 컨텍스트 존재 시 file_chat으로 fallback
-    if effective_task == "unknown" and _file_context_in_checkpoint:
-        effective_task = "file_chat"
-
-    # unknown → 고정 거절 (LLM 호출 없이 즉시 차단)
-    if effective_task == "unknown":
-        return JSONResponse({
-            "type": "chat",
-            "answer": "해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
-            "sources": [],
-        })
-
-    # LLM이 필요한 작업만 API 키 점검
-    if effective_task in {"knowledge_search", "ai_guide", "file_chat", "email_draft", "rfp_draft"}:
-        _ensure_llm_ready_or_503()
+    _ensure_llm_ready_or_503()
 
     # -------------------------
-    # 2) thread_id 계산
-    #    - 기본: 사용자 단일 컨텍스트 윈도우 (task 간 맥락 공유)
-    #    - 옵션: THREAD_CONTEXT_SCOPE=task 이면 기존처럼 task별 분리
-    # -------------------------
-    base_thread = str(user.get("user_id") or user.get("email"))
-    scope = (os.getenv("THREAD_CONTEXT_SCOPE", "user") or "user").strip().lower()
-    if scope == "task":
-        thread_id = f"{base_thread}:{effective_task}"
-    else:
-        thread_id = base_thread
-    config = {"configurable": {"thread_id": thread_id}}
-
-    # 이전 task와 달라지는 경우, 산출물 상태만 리셋해 task 간 오염을 방지
-    previous_task = None
-    try:
-        snap = graph_app.get_state(config)
-        prev_values = getattr(snap, "values", None) or {}
-        previous_task = (prev_values.get("task_type") or "").strip() or None
-    except Exception:
-        previous_task = None
-
-    # -------------------------
-    # 3) 새 메시지마다 초기값 + 사용자 입력 주입
+    # 2) 그래프 입력 (라우팅은 task_router_node가 담당)
     # -------------------------
     inputs = {
         "trace_id": trace_id,
         "input_data": user_input,
         "task_type": "",
-        "task_args": {
-            "_trace_label": "execute",
-            "task_type": effective_task,
-            "routing_debug": preview_debug,
-        },
+        "task_args": {},
     }
-
-    if previous_task and previous_task != effective_task:
-        inputs.update(
-            {
-                "draft_email": None,
-                "draft_rfp": None,
-                "extracted_text": None,
-                "extracted_meta": None,
-                "citations": [],
-                "citations_used": [],
-            }
-        )
 
     # -------------------------
     # 4) 그래프 실행
@@ -423,14 +346,14 @@ async def chat_endpoint(request: Request):
     save_routing_log(
         user_id=str(user.get("user_id") or user.get("email")),
         input_text=user_input,
-        final_task=(result.get("task_type") or effective_task),
+        final_task=(result.get("task_type") or "unknown"),
         routing_debug=(result.get("task_args") or {}).get("routing_debug", {}),
     )
 
     # -------------------------
-    # 5) 응답의 "최종 결정"값으로 task_type 재확정 (안전장치)
+    # 5) 응답의 "최종 결정"값으로 task_type 확정
     # -------------------------
-    task_type = (result.get("task_type") or "").strip() or effective_task
+    task_type = (result.get("task_type") or "").strip()
 
     if task_type == "file_extract":
         text = (result.get("extracted_text") or "")[:20000]

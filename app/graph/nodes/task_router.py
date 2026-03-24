@@ -1,9 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
 import re
 import threading
 from typing import Any, Dict, List, Tuple
+
+from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.config import get_embeddings, ROUTER_TOP1_MIN, ROUTER_MARGIN_MIN
 from app.core import trace_buffer
@@ -13,7 +15,6 @@ from app.graph.nodes.llm_intent_fallback import llm_intent_fallback
 from app.auth.intent_samples import load_all_samples, add_sample
 
 _ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "file_extract", "email_draft", "rfp_draft"}
-
 
 _EMAIL_STRUCT_RE = re.compile(r"(수신자\s*:|제목\s*:|내용\s*:|to\s*:|subject\s*:|body\s*:)", re.I)
 _FILE_EXT_RE = re.compile(r"\.(pdf|docx|pptx|xlsx|txt|md)\b", re.I)
@@ -47,7 +48,6 @@ def _has_file_path_hint(text: str) -> bool:
     return False
 
 
-
 def invalidate_sample_cache() -> None:
     global _SAMPLE_VECTORS
     with _SAMPLE_LOCK:
@@ -64,7 +64,6 @@ def _load_sample_vectors() -> Dict[str, List[List[float]]]:
             return _SAMPLE_VECTORS
 
         samples = load_all_samples()
-
         embeddings = get_embeddings()
         vectors: Dict[str, List[List[float]]] = {}
 
@@ -140,7 +139,7 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
         ranked.append((task, score))
 
     if not ranked:
-        return "chat", {"reason": "no_samples"}
+        return "unknown", {"reason": "no_samples"}, []
 
     ranked.sort(key=lambda x: x[1], reverse=True)
 
@@ -153,7 +152,7 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
 
     decision = top1_task
 
-    # Confidence gate: if ambiguous, ask user to choose.
+    # Confidence gate
     if top1_score < top1_min or margin < margin_min:
         decision = "unknown"
 
@@ -164,16 +163,15 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
             or _contains_any(user_input, _EMAIL_WRITE_HINTS)
             or _contains_any(user_input, _EMAIL_EDIT_HINTS)
         ):
-            decision = "chat"
+            decision = "unknown"
 
     if decision == "file_extract":
         if not (_has_file_path_hint(user_input) and _contains_any(user_input, _FILE_EXTRACT_HINTS)):
             decision = "unknown"
 
-    # 검색 의도가 있으면 out_of_scope 차단 해제 → chat으로 전환
-    # 주제가 아닌 의도로 판단: "당뇨병 탐색", "법률 자료 찾아줘" 등
+    # 검색 의도가 있으면 out_of_scope → knowledge_search로 전환
     if decision == "out_of_scope" and _contains_any(user_input, _SEARCH_INTENT_HINTS):
-        decision = "chat"
+        decision = "knowledge_search"
 
     debug = {
         "mode": "semantic",
@@ -189,108 +187,50 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
     return decision, debug, query_vec
 
 
-def preview_route(user_input: str, trace_id: str = "") -> tuple[str, dict]:
-    """
-    graph 실행 전 라우팅 결과를 미리 확인합니다 (main.py preview 전용).
-
-    - LLM intent fallback · add_sample 실행 안 함
-    - 반환: (task_type, routing_debug)
-    """
-    user_input = (user_input or "").strip()
-    trace_buffer.push(trace_id, node="task_router", event="enter", label="preview",
-                      data={"input": user_input[:200]})
-
-    if not user_input:
-        trace_buffer.push(trace_id, node="task_router", event="exit", label="preview",
-                          data={"task_type": "chat", "mode": "empty_input"})
-        return "chat", {}
-
-    try:
-        routed, debug, _ = _semantic_route(user_input)
-        debug["final_source"] = "semantic_unknown" if routed == "unknown" else "semantic"
-        trace_buffer.push(trace_id, node="task_router", event="exit", label="preview",
-                          data={
-                              "task_type": routed,
-                              "mode": debug.get("mode", ""),
-                              "final_source": debug.get("final_source", ""),
-                              "top1_score": debug.get("top1_score", ""),
-                              "margin": debug.get("margin", ""),
-                          })
-        return routed, debug
-    except Exception as e:
-        fallback = _rule_based_route(user_input)
-        debug = {
-            "mode": "rule_fallback",
-            "decision": fallback,
-            "final_source": "rule_fallback",
-            "reason": str(e),
-        }
-        trace_buffer.push(trace_id, node="task_router", event="exit", label="preview",
-                          data={"task_type": fallback, "mode": "rule_fallback", "error": str(e)})
-        return fallback, debug
-
-
 def task_router_node(state: GraphState) -> GraphState:
     print("--- [NODE] Task Router ---")
 
     trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
     task_args = state.get("task_args") or {}
-    label = (task_args.get("_trace_label") or "execute")
-    is_preview = (label == "preview")
 
-    trace_buffer.push(trace_id, node="task_router", event="enter", label=label,
+    trace_buffer.push(trace_id, node="task_router", event="enter", label="execute",
                       data={"input": user_input[:200]})
 
-    explicit = (task_args.get("task_type") or "").strip()
-    if explicit:
-        if explicit == "chat":
-            explicit = "knowledge_search"  # backward compat
-        elif explicit not in _ALLOWED:
-            explicit = "knowledge_search"
-        trace_buffer.push(trace_id, node="task_router", event="exit", label=label,
-                          data={"task_type": explicit, "mode": "explicit"})
-        return {"task_type": explicit, "task_args": task_args}
-
     if not user_input:
-        trace_buffer.push(trace_id, node="task_router", event="exit", label=label,
-                          data={"task_type": "chat", "mode": "empty_input"})
-        return {"task_type": "chat", "task_args": task_args}
+        trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
+                          data={"task_type": "knowledge_search", "mode": "empty_input"})
+        return {"task_type": "knowledge_search", "task_args": task_args}
 
     try:
         routed, debug, query_vec = _semantic_route(user_input)
 
         if routed == "unknown":
-            if is_preview:
-                # preview 단계: llm_fallback·add_sample 건너뜀 (샘플 오염·캐시 무효화 방지)
-                debug["final_source"] = "semantic_unknown"
+            # LLM 2차 분류기
+            llm_task, llm_debug = llm_intent_fallback(user_input)
+            debug["llm_fallback"] = llm_debug
+            if llm_task != "unknown":
+                routed = llm_task
+                debug["decision"] = llm_task
+                debug["final_source"] = "llm_fallback"
+                added = add_sample(llm_task, user_input, source="llm_fallback")
+                if added:
+                    invalidate_sample_cache()
             else:
-                # execute 단계: LLM 2차 분류기 실행
-                llm_task, llm_debug = llm_intent_fallback(user_input)
-                debug["llm_fallback"] = llm_debug
-                if llm_task != "unknown":
-                    routed = llm_task
-                    debug["decision"] = llm_task
-                    debug["final_source"] = "llm_fallback"
-                    added = add_sample(llm_task, user_input, source="llm_fallback")
-                    if added:
-                        invalidate_sample_cache()
-                else:
-                    debug["final_source"] = "unknown"
+                debug["final_source"] = "unknown"
         else:
             debug["final_source"] = "semantic"
 
+        # file_context가 있는데 unknown이면 file_chat으로 fallback
         file_context_present = bool((state.get("file_context") or "").strip())
-
-        # file_context가 있는데 unknown이면 chat으로 fallback
         if routed == "unknown" and file_context_present:
-            routed = "chat"
-            debug["decision"] = "chat"
+            routed = "file_chat"
+            debug["decision"] = "file_chat"
             debug["final_source"] = "file_context_fallback"
 
         merged_args = {**task_args, "routing_debug": debug}
 
-        trace_buffer.push(trace_id, node="task_router", event="exit", label=label,
+        trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
                           data={
                               "task_type": routed,
                               "mode": debug.get("mode", ""),
@@ -299,8 +239,8 @@ def task_router_node(state: GraphState) -> GraphState:
                               "margin": debug.get("margin", ""),
                           })
         return {"task_type": routed, "task_args": merged_args}
+
     except Exception as e:
-        # Safe fallback for missing key or embedding/runtime errors.
         fallback = _rule_based_route(user_input)
         merged_args = {
             **task_args,
@@ -311,15 +251,33 @@ def task_router_node(state: GraphState) -> GraphState:
                 "reason": str(e),
             },
         }
-        trace_buffer.push(trace_id, node="task_router", event="exit", label=label,
+        trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
                           data={"task_type": fallback, "mode": "rule_fallback", "error": str(e)})
         return {"task_type": fallback, "task_args": merged_args}
+
+
+def rejection_node(state: GraphState) -> Dict[str, Any]:
+    print("--- [NODE] Rejection ---")
+    user_input = (state.get("input_data") or "").strip()
+    trace_id = (state.get("trace_id") or "")
+    trace_buffer.push(trace_id, node="rejection", event="exit", label="execute",
+                      data={"input": user_input[:200]})
+    return {
+        **state,
+        "messages": [
+            HumanMessage(content=user_input),
+            AIMessage(content="해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요."),
+        ],
+        "citations_used": [],
+    }
 
 
 def route_by_task(state: GraphState) -> str:
     task = (state.get("task_type") or "knowledge_search").strip()
     if task == "chat":
         return "knowledge_search"  # backward compat
+    if task == "unknown":
+        return "rejection"
     if task in _ALLOWED:
         return task
     return "knowledge_search"
