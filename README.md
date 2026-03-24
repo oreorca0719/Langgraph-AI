@@ -23,6 +23,7 @@
 | **일반 대화** | 사내 업무 범위 내 자유 질의응답 및 AI 기능 안내 |
 | **시맨틱 라우팅** | 코사인 유사도 기반 의도 분류 + LLM fallback |
 | **대화 컨텍스트 영속화** | DynamoDB 체크포인터로 배포 후에도 대화 히스토리 유지 |
+| **프롬프트 인젝션 방어** | 4계층 오케스트레이션 방어 시스템 (Fine-tuning 없이 코드 레벨 구현) |
 
 ---
 
@@ -46,10 +47,16 @@
 사용자 요청
     │
     ▼
-[시맨틱 라우터]  ← DynamoDB(intent_samples) 기반 코사인 유사도 분류
-    │                + LLM intent fallback (unknown 시)
+[1차 방어] 임베딩 유사도 사전 차단 (슬라이딩 윈도우 포함)
+    │  인젝션 감지 시 즉시 거절 반환 (graph 실행 없음)
+    ▼
+[2차 방어] 시맨틱 라우터  ← DynamoDB(intent_samples) 기반 코사인 유사도 분류
+    │  + LLM intent fallback (unknown 시)
+    │  injection task_type 감지 시 즉시 거절 반환
     │
-    ├── chat     → Chroma 검색 → Gemini 답변 생성 (출처 + 페이지 번호 포함)
+    ├── chat     → [3차 방어: RAG 결과 · 파일 내용 sanitize]
+    │             → Chroma 검색 → Gemini 답변 생성 (출처 + 페이지 번호 포함)
+    │             → [4차 방어: 응답 출력 검증]
     ├── email    → 이메일 초안 생성 (To / CC / Subject / Body)
     ├── rfp      → RFP 초안 생성
     └── file     → 파일 텍스트 추출 → 요약 / Q&A
@@ -98,6 +105,11 @@ Langgraph-Rag/
 │   │
 │   ├── knowledge/
 │   │   └── ingest.py              # S3 → Chroma 문서 인제스트 (PDF 페이지 단위 청킹)
+│   │
+│   ├── security/
+│   │   ├── injection_detector.py  # 1차: 임베딩 유사도 + 슬라이딩 윈도우
+│   │   ├── content_sanitizer.py   # 3차: RAG 문서 · 파일 내용 sanitize
+│   │   └── output_validator.py    # 4차: 응답 민감 정보 출력 검증
 │   │
 │   └── core/
 │       ├── config.py              # 환경변수 중앙 관리
@@ -174,6 +186,11 @@ ROUTER_MARGIN_MIN=0.08
 HISTORY_MAX_MESSAGES=40
 CHECKPOINT_TTL_DAYS=7
 CHECKPOINT_MAX_MESSAGES=40
+
+# 프롬프트 인젝션 방어 임계값
+INJECTION_THRESHOLD_SINGLE=0.80
+INJECTION_THRESHOLD_COMBINED=0.76
+INJECTION_WINDOW_TURNS=3
 ```
 
 ---
@@ -222,6 +239,19 @@ App Runner 새 이미지 감지 → 자동 재배포
 | `APP_RUNNER_SERVICE_ARN` | App Runner 서비스 ARN |
 
 **환경변수**는 App Runner 콘솔 서비스 설정에서 별도 관리합니다. `.env`는 배포 이미지에 포함되지 않습니다.
+
+---
+
+## 프롬프트 인젝션 방어
+
+Fine-tuning 없이 오케스트레이션 레벨에서 4계층 방어를 구현합니다. 추가 LLM 호출 비용 없이 동작합니다.
+
+| 레이어 | 방식 | 차단 대상 |
+|---|---|---|
+| **1차** | 임베딩 유사도 + 슬라이딩 윈도우 | 알려진 패턴 · 분할 인젝션 · 다단계 공격 |
+| **2차** | 라우터 injection task_type | Semantic 변형 우회 공격 |
+| **3차** | RAG 문서 · 파일 내용 sanitize | 문서/파일 경유 간접 인젝션 |
+| **4차** | 응답 출력 규칙 기반 검증 | 1~3차 통과 후 민감 정보 노출 |
 
 ---
 
