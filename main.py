@@ -334,11 +334,11 @@ async def chat_endpoint(request: Request):
     effective_task, preview_debug = preview_route(user_input, trace_id)
     effective_task = (effective_task or "chat").strip() or "chat"
 
-    # ── [2차] 라우터가 injection으로 분류한 경우 즉시 차단 ──
-    if effective_task == "injection":
+    # ── [2차] 라우터가 injection / out_of_scope으로 분류한 경우 즉시 차단 ──
+    if effective_task in {"injection", "out_of_scope"}:
         return JSONResponse({
             "type": "chat",
-            "answer": "해당 요청에는 응하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
+            "answer": "해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
             "sources": [],
         })
 
