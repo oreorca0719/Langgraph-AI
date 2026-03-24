@@ -23,7 +23,7 @@ from app.security.content_sanitizer import sanitize, sanitize_docs
 
 HISTORY_MAX_MESSAGES         = int(os.getenv("HISTORY_MAX_MESSAGES", "40"))
 HISTORY_RELEVANCE_THRESHOLD  = float(os.getenv("HISTORY_RELEVANCE_THRESHOLD", "0.40"))
-HISTORY_ALWAYS_KEEP_LAST_N   = int(os.getenv("HISTORY_ALWAYS_KEEP_LAST_N", "2"))
+HISTORY_ALWAYS_KEEP_LAST_N   = int(os.getenv("HISTORY_ALWAYS_KEEP_LAST_N", "0"))
 
 # ── Chroma 싱글톤 ──
 _chroma_instance: Chroma | None = None
