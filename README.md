@@ -195,20 +195,6 @@ INJECTION_WINDOW_TURNS=3
 
 ---
 
-## 로컬 실행
-
-```bash
-# 의존성 설치
-pip install -r requirements.txt
-
-# 서버 시작
-uvicorn main:app --reload --port 8000
-```
-
-> **주의**: `knowledge_data/`와 `chroma_db/`는 로컬 테스트 전용입니다.
-> 운영 환경(App Runner)에서는 S3에서 자동 인제스트되며, 재배포 시 초기화됩니다.
-
----
 
 ## 배포 파이프라인
 
@@ -226,19 +212,6 @@ GitHub Actions (.github/workflows/deploy.yml)
       │
       ▼
 App Runner 새 이미지 감지 → 자동 재배포
-```
-
-**GitHub Secrets 설정 필요** (레포 → Settings → Secrets and variables → Actions)
-
-| Secret | 설명 |
-|---|---|
-| `AWS_ACCESS_KEY_ID` | IAM 사용자 액세스 키 |
-| `AWS_SECRET_ACCESS_KEY` | IAM 사용자 시크릿 키 |
-| `AWS_REGION` | `ap-northeast-1` |
-| `ECR_REPOSITORY` | ECR 레포지토리 이름 |
-| `APP_RUNNER_SERVICE_ARN` | App Runner 서비스 ARN |
-
-**환경변수**는 App Runner 콘솔 서비스 설정에서 별도 관리합니다. `.env`는 배포 이미지에 포함되지 않습니다.
 
 ---
 
