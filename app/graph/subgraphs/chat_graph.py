@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import threading
 from typing import Any, Dict, List
@@ -20,7 +21,9 @@ from app.core import trace_buffer
 from app.graph.states.state import GraphState
 from app.security.content_sanitizer import sanitize, sanitize_docs
 
-HISTORY_MAX_MESSAGES = int(os.getenv("HISTORY_MAX_MESSAGES", "40"))
+HISTORY_MAX_MESSAGES         = int(os.getenv("HISTORY_MAX_MESSAGES", "40"))
+HISTORY_RELEVANCE_THRESHOLD  = float(os.getenv("HISTORY_RELEVANCE_THRESHOLD", "0.40"))
+HISTORY_ALWAYS_KEEP_LAST_N   = int(os.getenv("HISTORY_ALWAYS_KEEP_LAST_N", "2"))
 
 # ── Chroma 싱글톤 ──
 _chroma_instance: Chroma | None = None
@@ -56,6 +59,71 @@ def _search_chroma(query: str, k: int = RETRIEVAL_TOP_K) -> List[Document]:
     return vectorstore.similarity_search(query, k=k)
 
 
+def _cosine(a: List[float], b: List[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return -1.0
+    dot = na = nb = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        na  += x * x
+        nb  += y * y
+    if na <= 0.0 or nb <= 0.0:
+        return -1.0
+    return dot / (math.sqrt(na) * math.sqrt(nb))
+
+
+def _filter_history_by_relevance(history: List, user_input: str) -> List:
+    """
+    HumanMessage+AIMessage 페어 단위로 현재 질문과 임베딩 유사도를 계산.
+    - 최근 HISTORY_ALWAYS_KEEP_LAST_N 페어: 무조건 포함 (연속 대화 유지)
+    - 나머지 페어: score >= HISTORY_RELEVANCE_THRESHOLD 인 경우만 포함
+    임베딩 실패 시 전체 히스토리를 그대로 반환 (non-fatal fallback).
+    """
+    if not history or not user_input.strip():
+        return history
+
+    pairs: List[tuple] = []
+    i = 0
+    while i < len(history) - 1:
+        if isinstance(history[i], HumanMessage):
+            pairs.append((history[i], history[i + 1]))
+            i += 2
+        else:
+            i += 1
+
+    if not pairs:
+        return history
+
+    always_n = HISTORY_ALWAYS_KEEP_LAST_N
+    keep_always = pairs[-always_n:]
+    candidates  = pairs[:-always_n] if len(pairs) > always_n else []
+
+    if not candidates:
+        result: List = []
+        for h, a in keep_always:
+            result.extend([h, a])
+        return result
+
+    try:
+        embeddings   = get_embeddings()
+        query_vec    = embeddings.embed_query(user_input)
+        human_texts  = [(p[0].content or "") for p in candidates]
+        msg_vecs     = embeddings.embed_documents(human_texts)
+
+        kept = [
+            pair for pair, vec in zip(candidates, msg_vecs)
+            if _cosine(query_vec, vec) >= HISTORY_RELEVANCE_THRESHOLD
+        ]
+    except Exception as e:
+        print(f"DEBUG: [HistoryFilter] 임베딩 실패, 전체 히스토리 사용: {e}")
+        kept = candidates
+
+    result = []
+    for h, a in (kept + keep_always):
+        result.extend([h, a])
+    return result
+
+
 def _format_search_result(docs: List[Document]) -> str:
     if not docs:
         return "관련 문서를 찾을 수 없습니다."
@@ -83,13 +151,15 @@ def build_chat_subgraph():
 
         trace_id = (state.get("trace_id") or "")
         user_input = (state.get("input_data") or "").strip()
-        chat_history = list(state.get("messages") or [])[-HISTORY_MAX_MESSAGES:]
+        raw_history  = list(state.get("messages") or [])[-HISTORY_MAX_MESSAGES:]
+        chat_history = _filter_history_by_relevance(raw_history, user_input)
         file_context = (state.get("file_context") or "").strip()
         file_context_name = (state.get("file_context_name") or "첨부 파일").strip()
         k = RETRIEVAL_TOP_K
 
         trace_buffer.push(trace_id, node="chat_agent", event="enter", label="execute",
-                          data={"input": user_input[:200], "has_file": bool(file_context)})
+                          data={"input": user_input[:200], "has_file": bool(file_context),
+                                "history_raw": len(raw_history), "history_filtered": len(chat_history)})
 
         # ── 클로저로 런타임 State 캡처 ──
 
