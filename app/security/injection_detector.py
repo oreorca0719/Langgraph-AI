@@ -8,10 +8,11 @@
 
 from __future__ import annotations
 
-import math
 import os
 import threading
 from typing import List
+
+from app.core.history_utils import cosine as _cosine
 
 # ── 레퍼런스 인젝션 텍스트 ──
 _INJECTION_REFERENCES: List[str] = [
@@ -67,18 +68,6 @@ INJECTION_WINDOW_TURNS       = int(os.getenv("INJECTION_WINDOW_TURNS", "3"))
 _ref_vectors: List[List[float]] | None = None
 _ref_lock = threading.Lock()
 
-
-def _cosine(a: List[float], b: List[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return -1.0
-    dot = na = nb = 0.0
-    for x, y in zip(a, b):
-        dot += x * y
-        na  += x * x
-        nb  += y * y
-    if na <= 0.0 or nb <= 0.0:
-        return -1.0
-    return dot / (math.sqrt(na) * math.sqrt(nb))
 
 
 def _load_ref_vectors() -> List[List[float]]:

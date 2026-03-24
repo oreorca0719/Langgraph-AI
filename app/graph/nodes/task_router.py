@@ -1,6 +1,5 @@
 ﻿from __future__ import annotations
 
-import math
 import os
 import re
 import threading
@@ -8,6 +7,7 @@ from typing import Any, Dict, List, Tuple
 
 from app.core.config import get_embeddings, ROUTER_TOP1_MIN, ROUTER_MARGIN_MIN
 from app.core import trace_buffer
+from app.core.history_utils import cosine as _cosine
 from app.graph.states.state import GraphState
 from app.graph.nodes.llm_intent_fallback import llm_intent_fallback
 from app.auth.intent_samples import load_all_samples, add_sample
@@ -46,22 +46,6 @@ def _has_file_path_hint(text: str) -> bool:
         return True
     return False
 
-
-def _cosine(a: List[float], b: List[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return -1.0
-
-    dot = 0.0
-    na = 0.0
-    nb = 0.0
-    for x, y in zip(a, b):
-        dot += x * y
-        na += x * x
-        nb += y * y
-
-    if na <= 0.0 or nb <= 0.0:
-        return -1.0
-    return dot / (math.sqrt(na) * math.sqrt(nb))
 
 
 def invalidate_sample_cache() -> None:

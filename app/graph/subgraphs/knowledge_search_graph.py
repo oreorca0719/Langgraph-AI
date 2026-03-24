@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 import os
 import threading
 from typing import Any, Dict, List
@@ -16,13 +15,10 @@ from app.core.config import (
     RETRIEVAL_MIN_RELEVANCE, RETRIEVAL_MAX_DISTANCE, RETRIEVAL_TOP_K,
 )
 from app.core import trace_buffer
+from app.core.history_utils import HISTORY_MAX_MESSAGES, cosine as _cosine, filter_history_by_relevance as _filter_history_by_relevance
 from app.graph.states.state import GraphState
 from app.security.content_sanitizer import sanitize_docs
 from app.security.output_validator import validate as validate_output
-
-HISTORY_MAX_MESSAGES        = int(os.getenv("HISTORY_MAX_MESSAGES", "40"))
-HISTORY_RELEVANCE_THRESHOLD = float(os.getenv("HISTORY_RELEVANCE_THRESHOLD", "0.40"))
-HISTORY_ALWAYS_KEEP_LAST_N  = int(os.getenv("HISTORY_ALWAYS_KEEP_LAST_N", "0"))
 
 # ── Chroma 싱글톤 ──
 _chroma_instance: Chroma | None = None
@@ -72,63 +68,6 @@ def _format_search_result(docs: List[Document]) -> str:
     return "\n\n".join(blocks)
 
 
-def _cosine(a: List[float], b: List[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return -1.0
-    dot = na = nb = 0.0
-    for x, y in zip(a, b):
-        dot += x * y
-        na  += x * x
-        nb  += y * y
-    if na <= 0.0 or nb <= 0.0:
-        return -1.0
-    return dot / (math.sqrt(na) * math.sqrt(nb))
-
-
-def _filter_history_by_relevance(history: List, user_input: str) -> List:
-    if not history or not user_input.strip():
-        return history
-
-    pairs: List[tuple] = []
-    i = 0
-    while i < len(history) - 1:
-        if isinstance(history[i], HumanMessage):
-            pairs.append((history[i], history[i + 1]))
-            i += 2
-        else:
-            i += 1
-
-    if not pairs:
-        return history
-
-    always_n = HISTORY_ALWAYS_KEEP_LAST_N
-    keep_always = pairs[-always_n:] if always_n > 0 else []
-    candidates  = pairs[:-always_n] if always_n > 0 else pairs
-
-    if not candidates:
-        result: List = []
-        for h, a in keep_always:
-            result.extend([h, a])
-        return result
-
-    try:
-        embeddings  = get_embeddings()
-        query_vec   = embeddings.embed_query(user_input)
-        human_texts = [(p[0].content or "") for p in candidates]
-        msg_vecs    = embeddings.embed_documents(human_texts)
-
-        kept = [
-            pair for pair, vec in zip(candidates, msg_vecs)
-            if _cosine(query_vec, vec) >= HISTORY_RELEVANCE_THRESHOLD
-        ]
-    except Exception as e:
-        print(f"DEBUG: [HistoryFilter/KS] 임베딩 실패, 전체 히스토리 사용: {e}")
-        kept = candidates
-
-    result = []
-    for h, a in (kept + keep_always):
-        result.extend([h, a])
-    return result
 
 
 def build_knowledge_search_subgraph():
