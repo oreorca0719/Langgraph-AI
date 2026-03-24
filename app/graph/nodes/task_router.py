@@ -177,6 +177,47 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
     return decision, debug, query_vec
 
 
+def preview_route(user_input: str, trace_id: str = "") -> tuple[str, dict]:
+    """
+    graph 실행 전 라우팅 결과를 미리 확인합니다 (main.py preview 전용).
+
+    - LLM intent fallback · add_sample 실행 안 함
+    - 반환: (task_type, routing_debug)
+    """
+    user_input = (user_input or "").strip()
+    trace_buffer.push(trace_id, node="task_router", event="enter", label="preview",
+                      data={"input": user_input[:200]})
+
+    if not user_input:
+        trace_buffer.push(trace_id, node="task_router", event="exit", label="preview",
+                          data={"task_type": "chat", "mode": "empty_input"})
+        return "chat", {}
+
+    try:
+        routed, debug, _ = _semantic_route(user_input)
+        debug["final_source"] = "semantic_unknown" if routed == "unknown" else "semantic"
+        trace_buffer.push(trace_id, node="task_router", event="exit", label="preview",
+                          data={
+                              "task_type": routed,
+                              "mode": debug.get("mode", ""),
+                              "final_source": debug.get("final_source", ""),
+                              "top1_score": debug.get("top1_score", ""),
+                              "margin": debug.get("margin", ""),
+                          })
+        return routed, debug
+    except Exception as e:
+        fallback = _rule_based_route(user_input)
+        debug = {
+            "mode": "rule_fallback",
+            "decision": fallback,
+            "final_source": "rule_fallback",
+            "reason": str(e),
+        }
+        trace_buffer.push(trace_id, node="task_router", event="exit", label="preview",
+                          data={"task_type": fallback, "mode": "rule_fallback", "error": str(e)})
+        return fallback, debug
+
+
 def task_router_node(state: GraphState) -> GraphState:
     print("--- [NODE] Task Router ---")
 

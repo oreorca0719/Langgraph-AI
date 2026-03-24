@@ -24,7 +24,7 @@ from langgraph.graph import END, StateGraph
 from app.checkpointer.dynamo_checkpointer import DynamoDBCheckpointer, ensure_checkpoints_table
 
 from app.core.config import has_gemini_api_key
-from app.graph.nodes.task_router import task_router_node, route_by_task
+from app.graph.nodes.task_router import task_router_node, route_by_task, preview_route
 from app.security.injection_detector import check as injection_check
 from app.security.content_sanitizer import sanitize as sanitize_content
 from app.security.output_validator import validate as validate_output
@@ -331,20 +331,8 @@ async def chat_endpoint(request: Request):
             "sources": [],
         })
 
-    preview = task_router_node({
-        "trace_id": trace_id,
-        "input_data": user_input,
-        "task_type": "",
-        "task_args": {"_trace_label": "preview"},
-        "messages": [],
-        "draft_email": None,
-        "draft_rfp": None,
-        "extracted_text": None,
-        "extracted_meta": None,
-        "citations": [],
-        "citations_used": [],
-    })
-    effective_task = (preview.get("task_type") or "chat").strip() or "chat"
+    effective_task, preview_debug = preview_route(user_input, trace_id)
+    effective_task = (effective_task or "chat").strip() or "chat"
 
     # ── [2차] 라우터가 injection으로 분류한 경우 즉시 차단 ──
     if effective_task == "injection":
@@ -391,7 +379,6 @@ async def chat_endpoint(request: Request):
     # -------------------------
     # 3) 새 메시지마다 초기값 + 사용자 입력 주입
     # -------------------------
-    preview_debug = (preview.get("task_args") or {}).get("routing_debug", {})
     inputs = {
         "trace_id": trace_id,
         "input_data": user_input,
