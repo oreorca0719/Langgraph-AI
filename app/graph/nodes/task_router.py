@@ -12,7 +12,7 @@ from app.graph.states.state import GraphState
 from app.graph.nodes.llm_intent_fallback import llm_intent_fallback
 from app.auth.intent_samples import load_all_samples, add_sample
 
-_ALLOWED = {"chat", "file_extract", "email_draft", "rfp_draft"}
+_ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "file_extract", "email_draft", "rfp_draft"}
 
 
 _EMAIL_STRUCT_RE = re.compile(r"(수신자\s*:|제목\s*:|내용\s*:|to\s*:|subject\s*:|body\s*:)", re.I)
@@ -105,7 +105,7 @@ def _rule_based_route(user_input: str) -> str:
     if has_extract_intent and _has_file_path_hint(user_input):
         return "file_extract"
 
-    return "chat"
+    return "knowledge_search"
 
 
 def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
@@ -238,8 +238,10 @@ def task_router_node(state: GraphState) -> GraphState:
 
     explicit = (task_args.get("task_type") or "").strip()
     if explicit:
-        if explicit not in _ALLOWED:
-            explicit = "chat"
+        if explicit == "chat":
+            explicit = "knowledge_search"  # backward compat
+        elif explicit not in _ALLOWED:
+            explicit = "knowledge_search"
         trace_buffer.push(trace_id, node="task_router", event="exit", label=label,
                           data={"task_type": explicit, "mode": "explicit"})
         return {"task_type": explicit, "task_args": task_args}
@@ -309,7 +311,9 @@ def task_router_node(state: GraphState) -> GraphState:
 
 
 def route_by_task(state: GraphState) -> str:
-    task = (state.get("task_type") or "chat").strip()
+    task = (state.get("task_type") or "knowledge_search").strip()
+    if task == "chat":
+        return "knowledge_search"  # backward compat
     if task in _ALLOWED:
         return task
-    return "chat"
+    return "knowledge_search"

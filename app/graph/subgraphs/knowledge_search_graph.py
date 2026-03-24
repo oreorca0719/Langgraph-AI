@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+import math
+import os
+import threading
+from typing import Any, Dict, List
+
+from langchain_chroma import Chroma
+from langchain_core.documents import Document
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langgraph.graph import END, StateGraph
+
+from app.core.config import (
+    get_embeddings, get_llm,
+    CHROMA_DB_PATH, CHROMA_COLLECTION,
+    RETRIEVAL_MIN_RELEVANCE, RETRIEVAL_MAX_DISTANCE, RETRIEVAL_TOP_K,
+)
+from app.core import trace_buffer
+from app.graph.states.state import GraphState
+from app.security.content_sanitizer import sanitize_docs
+from app.security.output_validator import validate as validate_output
+
+HISTORY_MAX_MESSAGES        = int(os.getenv("HISTORY_MAX_MESSAGES", "40"))
+HISTORY_RELEVANCE_THRESHOLD = float(os.getenv("HISTORY_RELEVANCE_THRESHOLD", "0.40"))
+HISTORY_ALWAYS_KEEP_LAST_N  = int(os.getenv("HISTORY_ALWAYS_KEEP_LAST_N", "0"))
+
+# ── Chroma 싱글톤 ──
+_chroma_instance: Chroma | None = None
+_chroma_lock = threading.Lock()
+
+
+def _get_chroma() -> Chroma:
+    global _chroma_instance
+    if _chroma_instance is None:
+        with _chroma_lock:
+            if _chroma_instance is None:
+                _chroma_instance = Chroma(
+                    persist_directory=CHROMA_DB_PATH,
+                    embedding_function=get_embeddings(),
+                    collection_name=CHROMA_COLLECTION,
+                )
+    return _chroma_instance
+
+
+def _search_chroma(query: str, k: int = RETRIEVAL_TOP_K) -> List[Document]:
+    vectorstore = _get_chroma()
+    min_relevance = RETRIEVAL_MIN_RELEVANCE
+    max_distance = RETRIEVAL_MAX_DISTANCE
+
+    if hasattr(vectorstore, "similarity_search_with_relevance_scores"):
+        pairs = vectorstore.similarity_search_with_relevance_scores(query, k=k)
+        return [doc for doc, score in pairs if score >= min_relevance]
+
+    if hasattr(vectorstore, "similarity_search_with_score"):
+        pairs = vectorstore.similarity_search_with_score(query, k=k)
+        return [doc for doc, score in pairs if score <= max_distance]
+
+    return vectorstore.similarity_search(query, k=k)
+
+
+def _format_search_result(docs: List[Document]) -> str:
+    if not docs:
+        return ""
+    blocks: List[str] = []
+    for i, d in enumerate(docs, start=1):
+        text = (d.page_content or "").strip()
+        md = getattr(d, "metadata", {}) or {}
+        title = md.get("title") or md.get("file_name") or "문서"
+        page_num = md.get("page_number")
+        location = f" (p.{page_num})" if page_num else ""
+        blocks.append(f"[{i}] {title}{location}\n{text[:1200]}")
+    return "\n\n".join(blocks)
+
+
+def _cosine(a: List[float], b: List[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return -1.0
+    dot = na = nb = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        na  += x * x
+        nb  += y * y
+    if na <= 0.0 or nb <= 0.0:
+        return -1.0
+    return dot / (math.sqrt(na) * math.sqrt(nb))
+
+
+def _filter_history_by_relevance(history: List, user_input: str) -> List:
+    if not history or not user_input.strip():
+        return history
+
+    pairs: List[tuple] = []
+    i = 0
+    while i < len(history) - 1:
+        if isinstance(history[i], HumanMessage):
+            pairs.append((history[i], history[i + 1]))
+            i += 2
+        else:
+            i += 1
+
+    if not pairs:
+        return history
+
+    always_n = HISTORY_ALWAYS_KEEP_LAST_N
+    keep_always = pairs[-always_n:] if always_n > 0 else []
+    candidates  = pairs[:-always_n] if always_n > 0 else pairs
+
+    if not candidates:
+        result: List = []
+        for h, a in keep_always:
+            result.extend([h, a])
+        return result
+
+    try:
+        embeddings  = get_embeddings()
+        query_vec   = embeddings.embed_query(user_input)
+        human_texts = [(p[0].content or "") for p in candidates]
+        msg_vecs    = embeddings.embed_documents(human_texts)
+
+        kept = [
+            pair for pair, vec in zip(candidates, msg_vecs)
+            if _cosine(query_vec, vec) >= HISTORY_RELEVANCE_THRESHOLD
+        ]
+    except Exception as e:
+        print(f"DEBUG: [HistoryFilter/KS] 임베딩 실패, 전체 히스토리 사용: {e}")
+        kept = candidates
+
+    result = []
+    for h, a in (kept + keep_always):
+        result.extend([h, a])
+    return result
+
+
+def build_knowledge_search_subgraph():
+    """
+    사내 문서 검색 전용 서브그래프.
+    LLM이 도구 선택을 판단하지 않고 코드에서 직접 RAG 검색 후 LLM 요약.
+    ReAct 패턴 불필요.
+    """
+
+    def knowledge_search_node(state: GraphState) -> Dict[str, Any]:
+        print("--- [NODE] Knowledge Search ---")
+
+        trace_id   = (state.get("trace_id") or "")
+        user_input = (state.get("input_data") or "").strip()
+        raw_history  = list(state.get("messages") or [])[-HISTORY_MAX_MESSAGES:]
+        chat_history = _filter_history_by_relevance(raw_history, user_input)
+        k = RETRIEVAL_TOP_K
+
+        trace_buffer.push(trace_id, node="knowledge_search", event="enter", label="execute",
+                          data={"input": user_input[:200],
+                                "history_raw": len(raw_history),
+                                "history_filtered": len(chat_history)})
+
+        # 코드에서 직접 RAG 검색
+        docs = _search_chroma(user_input, k=k)
+        docs = sanitize_docs(docs, source="rag")
+        search_result = _format_search_result(docs)
+
+        trace_buffer.push(trace_id, node="knowledge_search", event="call", label="execute",
+                          data={"docs_found": len(docs)})
+
+        if not docs:
+            final_message = AIMessage(
+                content="관련 사내 문서를 찾을 수 없습니다. 다른 키워드로 검색해 보시거나 담당 부서에 문의해 주세요."
+            )
+        else:
+            system_content = (
+                "당신은 Kaiper AI입니다. 아래 사내 문서 검색 결과를 바탕으로 사용자 질문에 답하세요.\n\n"
+                "【응답 원칙】\n"
+                "• 사용자 질문 중심으로 핵심만 요약하세요 (원문 나열 금지)\n"
+                "• 수치·날짜·고유명사는 원문 그대로, 출처는 [1][2] 형식으로 문장 끝에 표시\n"
+                "• 정중한 비즈니스 어투, 불렛(•) 활용\n\n"
+                f"【검색 결과】\n{search_result}"
+            )
+            messages = (
+                [SystemMessage(content=system_content)]
+                + chat_history
+                + [HumanMessage(content=user_input)]
+            )
+            response = get_llm().invoke(messages)
+
+            is_valid, safe_content = validate_output(str(response.content))
+            final_message = response if is_valid else AIMessage(content=safe_content)
+
+        response_len = len(str(final_message.content))
+        print(f"DEBUG: [Knowledge Search] 응답 생성 완료 ({response_len}자)")
+        trace_buffer.push(trace_id, node="knowledge_search", event="exit", label="execute",
+                          data={"response_len": response_len})
+
+        return {
+            **state,
+            "messages": [HumanMessage(content=user_input), final_message],
+            "citations_used": [],
+        }
+
+    g = StateGraph(GraphState)
+    g.add_node("knowledge_search", knowledge_search_node)
+    g.set_entry_point("knowledge_search")
+    g.add_edge("knowledge_search", END)
+    return g.compile()

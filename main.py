@@ -31,6 +31,8 @@ from app.security.output_validator import validate as validate_output
 from app.graph.states.state import GraphState
 from app.knowledge.ingest import auto_ingest_if_enabled
 from app.graph.subgraphs.chat_graph import build_chat_subgraph
+from app.graph.subgraphs.knowledge_search_graph import build_knowledge_search_subgraph
+from app.graph.subgraphs.ai_guide_graph import build_ai_guide_subgraph
 from app.graph.subgraphs.file_graph import build_file_subgraph
 from app.graph.subgraphs.email_graph import build_email_subgraph
 from app.graph.subgraphs.rfp_graph import build_rfp_subgraph
@@ -38,7 +40,7 @@ from app.graph.subgraphs.rfp_graph import build_rfp_subgraph
 # Auth (DynamoDB)
 import uuid
 
-from app.auth.deps import get_current_user, require_approved_user
+from app.auth.deps import get_current_user, require_approved_user, require_admin_user
 from app.auth.dynamo import ensure_admin_user, ensure_users_table_if_enabled
 from app.auth.routes import router as auth_router, set_templates
 from app.auth.security import hash_password
@@ -58,7 +60,9 @@ workflow = StateGraph(GraphState)
 workflow.add_node("task_router", task_router_node)
 
 # 2) Subgraphs (각 서브그래프를 runnable로 등록)
-workflow.add_node("chat_subgraph", build_chat_subgraph())
+workflow.add_node("knowledge_search_subgraph", build_knowledge_search_subgraph())
+workflow.add_node("ai_guide_subgraph", build_ai_guide_subgraph())
+workflow.add_node("file_chat_subgraph", build_chat_subgraph())
 workflow.add_node("file_subgraph", build_file_subgraph())
 workflow.add_node("email_subgraph", build_email_subgraph())
 workflow.add_node("rfp_subgraph", build_rfp_subgraph())
@@ -68,9 +72,11 @@ workflow.set_entry_point("task_router")
 # 3) Router -> task_type에 따라 subgraph로 분기
 workflow.add_conditional_edges(
     "task_router",
-    route_by_task,  # 분기 함수를 그대로 사용
+    route_by_task,
     {
-        "chat": "chat_subgraph",
+        "knowledge_search": "knowledge_search_subgraph",
+        "ai_guide": "ai_guide_subgraph",
+        "file_chat": "file_chat_subgraph",
         "file_extract": "file_subgraph",
         "email_draft": "email_subgraph",
         "rfp_draft": "rfp_subgraph",
@@ -78,7 +84,9 @@ workflow.add_conditional_edges(
 )
 
 # 4) 각 subgraph 완료 후 END로 연결
-workflow.add_edge("chat_subgraph", END)
+workflow.add_edge("knowledge_search_subgraph", END)
+workflow.add_edge("ai_guide_subgraph", END)
+workflow.add_edge("file_chat_subgraph", END)
 workflow.add_edge("file_subgraph", END)
 workflow.add_edge("email_subgraph", END)
 workflow.add_edge("rfp_subgraph", END)
@@ -332,7 +340,7 @@ async def chat_endpoint(request: Request):
         })
 
     effective_task, preview_debug = preview_route(user_input, trace_id)
-    effective_task = (effective_task or "chat").strip() or "chat"
+    effective_task = (effective_task or "knowledge_search").strip() or "knowledge_search"
 
     # ── [2차] 라우터가 injection / out_of_scope으로 분류한 경우 즉시 차단 ──
     if effective_task in {"injection", "out_of_scope"}:
@@ -342,9 +350,9 @@ async def chat_endpoint(request: Request):
             "sources": [],
         })
 
-    # unknown + 파일 컨텍스트 존재 시 chat으로 fallback
+    # unknown + 파일 컨텍스트 존재 시 file_chat으로 fallback
     if effective_task == "unknown" and _file_context_in_checkpoint:
-        effective_task = "chat"
+        effective_task = "file_chat"
 
     # unknown → 고정 거절 (LLM 호출 없이 즉시 차단)
     if effective_task == "unknown":
@@ -355,7 +363,7 @@ async def chat_endpoint(request: Request):
         })
 
     # LLM이 필요한 작업만 API 키 점검
-    if effective_task in {"chat", "email_draft", "rfp_draft"}:
+    if effective_task in {"knowledge_search", "ai_guide", "file_chat", "email_draft", "rfp_draft"}:
         _ensure_llm_ready_or_503()
 
     # -------------------------
