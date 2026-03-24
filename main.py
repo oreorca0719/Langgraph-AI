@@ -346,9 +346,13 @@ async def chat_endpoint(request: Request):
     if effective_task == "unknown" and _file_context_in_checkpoint:
         effective_task = "chat"
 
-    # unknown → chat으로 fallback (범위 외 판단은 chat 에이전트에 위임)
+    # unknown → 고정 거절 (LLM 호출 없이 즉시 차단)
     if effective_task == "unknown":
-        effective_task = "chat"
+        return JSONResponse({
+            "type": "chat",
+            "answer": "해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
+            "sources": [],
+        })
 
     # LLM이 필요한 작업만 API 키 점검
     if effective_task in {"chat", "email_draft", "rfp_draft"}:
