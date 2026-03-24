@@ -108,6 +108,26 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
         }
         return "email_draft", debug, []
 
+    # 이메일 작성 요청: ("이메일"/"메일"/"email") + 작성 힌트 → 즉시 email_draft
+    if (
+        _has_email_struct(user_input)
+        or (
+            _contains_any(user_input, ["이메일", "메일", "email"])
+            and _contains_any(user_input, _EMAIL_WRITE_HINTS)
+        )
+    ):
+        debug = {
+            "mode": "semantic",
+            "top1_task": "email_draft",
+            "top1_score": 1.0,
+            "top2_score": 0.0,
+            "margin": 1.0,
+            "decision": "email_draft",
+            "reason": "email_write_hint",
+            "ranked": [{"task": "email_draft", "score": 1.0}],
+        }
+        return "email_draft", debug, []
+
     vectors = _load_sample_vectors()
     embeddings = get_embeddings()
     query_vec = embeddings.embed_query(user_input)
