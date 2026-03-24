@@ -25,6 +25,9 @@ from app.checkpointer.dynamo_checkpointer import DynamoDBCheckpointer, ensure_ch
 
 from app.core.config import has_gemini_api_key
 from app.graph.nodes.task_router import task_router_node, route_by_task
+from app.security.injection_detector import check as injection_check
+from app.security.content_sanitizer import sanitize as sanitize_content
+from app.security.output_validator import validate as validate_output
 from app.graph.states.state import GraphState
 from app.knowledge.ingest import auto_ingest_if_enabled
 from app.graph.subgraphs.chat_graph import build_chat_subgraph
@@ -307,6 +310,27 @@ async def chat_endpoint(request: Request):
 
     trace_id = str(uuid.uuid4())
 
+    # ── [1차] 임베딩 유사도 사전 차단 (슬라이딩 윈도우 포함) ──
+    try:
+        from langchain_core.messages import HumanMessage as _HM
+        _snap_values_for_injection = getattr(
+            graph_app.get_state({"configurable": {"thread_id": _early_thread_id}}),
+            "values", None,
+        ) or {}
+        _recent_user_turns = [
+            msg.content for msg in (_snap_values_for_injection.get("messages") or [])
+            if isinstance(msg, _HM) and isinstance(msg.content, str)
+        ][-3:]
+    except Exception:
+        _recent_user_turns = []
+
+    if injection_check(user_input, _recent_user_turns):
+        return JSONResponse({
+            "type": "chat",
+            "answer": "해당 요청에는 응하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
+            "sources": [],
+        })
+
     preview = task_router_node({
         "trace_id": trace_id,
         "input_data": user_input,
@@ -321,6 +345,14 @@ async def chat_endpoint(request: Request):
         "citations_used": [],
     })
     effective_task = (preview.get("task_type") or "chat").strip() or "chat"
+
+    # ── [2차] 라우터가 injection으로 분류한 경우 즉시 차단 ──
+    if effective_task == "injection":
+        return JSONResponse({
+            "type": "chat",
+            "answer": "해당 요청에는 응하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
+            "sources": [],
+        })
 
     # unknown + 파일 컨텍스트 존재 시 chat으로 fallback
     if effective_task == "unknown" and _file_context_in_checkpoint:
@@ -446,6 +478,9 @@ async def chat_endpoint(request: Request):
     else:
         final_text = str(raw_answer)
 
+    # ── [4차] 출력 검증 ──
+    _, final_text = validate_output(final_text)
+
     def _extract_cited_ids(text: str) -> set[int]:
         return {int(x) for x in re.findall(r"\[(\d{1,3})\]", text or "")}
 
@@ -541,6 +576,9 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"파일 추출 실패: {e}")
 
+    # ── [3차] 파일 내용 sanitize ──
+    text = sanitize_content(text, source=f"upload:{file.filename}")
+
     summary = None
     keywords: list[str] = []
     if has_gemini_api_key() and text.strip():
@@ -627,6 +665,9 @@ async def chat_with_file(
 
     from app.core.config import get_llm
     from langchain_core.messages import HumanMessage, SystemMessage
+
+    # ── [3차] 파일 내용 sanitize ──
+    raw_text = sanitize_content(raw_text, source=f"chat-with-file:{file.filename}")
 
     file_context = raw_text.strip()
     truncated = len(file_context) > _FILE_CONTEXT_MAX_CHARS

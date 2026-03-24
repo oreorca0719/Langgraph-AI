@@ -18,6 +18,7 @@ from app.core.config import (
 )
 from app.core import trace_buffer
 from app.graph.states.state import GraphState
+from app.security.content_sanitizer import sanitize, sanitize_docs
 
 HISTORY_MAX_MESSAGES = int(os.getenv("HISTORY_MAX_MESSAGES", "40"))
 
@@ -102,6 +103,7 @@ def build_chat_subgraph():
             trace_buffer.push(trace_id, node="tool:search_knowledge_base", event="call",
                               label="execute", data={"query": query[:100]})
             docs = _search_chroma(query, k=k)
+            docs = sanitize_docs(docs, source="rag")
             trace_buffer.push(trace_id, node="tool:search_knowledge_base", event="exit",
                               label="execute", data={"docs_found": len(docs)})
             return _format_search_result(docs)
@@ -114,7 +116,8 @@ def build_chat_subgraph():
             print(f"DEBUG: [Tool] get_attached_file name={file_context_name}")
             trace_buffer.push(trace_id, node="tool:get_attached_file", event="call",
                               label="execute", data={"file_name": file_context_name})
-            return f"[파일명: {file_context_name}]\n\n{file_context}"
+            safe_context = sanitize(file_context, source=f"file:{file_context_name}")
+            return f"[파일명: {file_context_name}]\n\n{safe_context}"
 
         # ── 시스템 프롬프트 ──
         file_hint = (
