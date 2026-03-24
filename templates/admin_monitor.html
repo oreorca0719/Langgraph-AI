@@ -727,7 +727,7 @@
     const statsBody = document.getElementById('stats-body');
     const unknownTbody = document.getElementById('unknown-tbody');
 
-    const TASK_OPTIONS = ['chat', 'email_draft', 'file_extract', 'rfp_draft'];
+    const TASK_OPTIONS = ['chat', 'email_draft', 'file_extract', 'rfp_draft', 'out_of_scope', 'injection'];
 
     function sourceFillClass(source) {
       if (['semantic', 'llm_fallback', 'rule_fallback', 'unknown'].includes(source)) return 'fill-' + source;
