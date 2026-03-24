@@ -469,7 +469,8 @@
                 <th>Score</th>
                 <th>Margin</th>
                 <th>방식</th>
-              <th></th>
+                <th>재분류</th>
+                <th></th>
               </tr>
             </thead>
             <tbody id="routing-tbody">
@@ -626,12 +627,12 @@
     }
 
     async function loadRoutingLogs() {
-      routingTbody.innerHTML = '<tr><td colspan="7" class="empty-state">불러오는 중...</td></tr>';
+      routingTbody.innerHTML = '<tr><td colspan="9" class="empty-state">불러오는 중...</td></tr>';
       try {
         const res = await fetch('/admin/api/routing-logs');
         const logs = await res.json();
         if (!logs.length) {
-          routingTbody.innerHTML = '<tr><td colspan="7" class="empty-state">데이터 없음</td></tr>';
+          routingTbody.innerHTML = '<tr><td colspan="9" class="empty-state">데이터 없음</td></tr>';
           return;
         }
         routingTbody.innerHTML = logs.map(log => `
@@ -643,11 +644,17 @@
             <td>${scoreBar(log.top1_score)}</td>
             <td>${scoreBar(log.margin)}</td>
             <td style="color:var(--text-dim)">${modeLabel(log.mode)}</td>
+            <td style="white-space:nowrap">
+              <select class="task-select" data-text="${escapeHtml(log.input_text)}">
+                ${TASK_OPTIONS.map(t => `<option value="${t}">${t}</option>`).join('')}
+              </select>
+              <button class="assign-btn reclassify-btn" data-text="${escapeHtml(log.input_text)}" style="margin-left:4px">추가</button>
+            </td>
             <td><button class="icon-btn delete-row-btn" data-id="${log.log_id}">삭제</button></td>
           </tr>
         `).join('');
       } catch (e) {
-        routingTbody.innerHTML = `<tr><td colspan="7" class="empty-state">오류: ${e.message}</td></tr>`;
+        routingTbody.innerHTML = `<tr><td colspan="9" class="empty-state">오류: ${e.message}</td></tr>`;
       }
     }
 
@@ -660,12 +667,42 @@
     });
 
     routingTbody.addEventListener('click', async (e) => {
-      const btn = e.target.closest('.delete-row-btn');
-      if (!btn) return;
-      btn.disabled = true;
-      const logId = btn.dataset.id;
-      await fetch('/admin/api/routing-logs/' + encodeURIComponent(logId), { method: 'DELETE' });
-      loadRoutingLogs();
+      const deleteBtn = e.target.closest('.delete-row-btn');
+      if (deleteBtn) {
+        deleteBtn.disabled = true;
+        const logId = deleteBtn.dataset.id;
+        await fetch('/admin/api/routing-logs/' + encodeURIComponent(logId), { method: 'DELETE' });
+        loadRoutingLogs();
+        return;
+      }
+
+      const assignBtn = e.target.closest('.reclassify-btn');
+      if (assignBtn) {
+        const row = assignBtn.closest('tr');
+        const select = row.querySelector('.task-select');
+        const task = select.value;
+        const text = assignBtn.dataset.text;
+        assignBtn.disabled = true;
+        assignBtn.textContent = '...';
+        try {
+          const res = await fetch('/admin/api/intent-samples', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ task, text }),
+          });
+          const data = await res.json();
+          if (data.ok) {
+            assignBtn.textContent = data.added ? '완료' : '중복';
+            assignBtn.style.color = data.added ? '#7cf0c8' : '#ffc966';
+          } else {
+            assignBtn.textContent = '오류';
+            assignBtn.disabled = false;
+          }
+        } catch {
+          assignBtn.textContent = '오류';
+          assignBtn.disabled = false;
+        }
+      }
     });
     loadRoutingLogs();
 
