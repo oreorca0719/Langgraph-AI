@@ -239,6 +239,48 @@ def load_all_samples() -> Dict[str, List[str]]:
     return result if result else SEED_SAMPLES
 
 
+def reset_seed_samples() -> int:
+    """
+    source='seed' 항목만 전체 삭제 후 현재 SEED_SAMPLES로 재삽입합니다.
+    llm_fallback / admin 소스 항목은 보존됩니다.
+
+    Returns:
+        삭제된 항목 수
+    """
+    tbl = _table()
+    client = boto3.client("dynamodb", region_name=_region())
+    deleted = 0
+
+    try:
+        paginator = client.get_paginator("scan")
+        keys_to_delete = []
+        for page in paginator.paginate(
+            TableName=_table_name(),
+            FilterExpression="#src = :seed",
+            ExpressionAttributeNames={"#src": "source", "#task": "task", "#text": "text"},
+            ExpressionAttributeValues={":seed": {"S": "seed"}},
+            ProjectionExpression="#task, #text",
+        ):
+            for raw in page.get("Items", []):
+                task = raw.get("task", {}).get("S", "")
+                text = raw.get("text", {}).get("S", "")
+                if task and text:
+                    keys_to_delete.append({"task": task, "text": text})
+
+        with tbl.batch_writer() as batch:
+            for key in keys_to_delete:
+                batch.delete_item(Key=key)
+                deleted += 1
+
+        print(f"[INTENT_SAMPLES] Deleted {deleted} seed items.")
+    except Exception as e:
+        print(f"[INTENT_SAMPLES] reset_seed_samples delete failed: {e}")
+        raise
+
+    seed_intent_samples()
+    return deleted
+
+
 def add_sample(task: str, text: str, source: str = "llm_fallback") -> bool:
     """
     LLM fallback 성공 케이스를 샘플로 추가합니다.

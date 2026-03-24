@@ -30,7 +30,7 @@ from .dynamo import (
 from .deps import get_current_user, require_admin_user
 from .security import hash_password, verify_password
 from .routing_log import scan_recent_logs, delete_routing_log, delete_all_routing_logs
-from .intent_samples import add_sample, load_all_samples
+from .intent_samples import add_sample, load_all_samples, reset_seed_samples
 
 router = APIRouter()
 _limiter = Limiter(key_func=get_remote_address, config_filename="__no_env__")
@@ -327,6 +327,19 @@ async def admin_add_intent_sample(request: Request):
     if added:
         invalidate_sample_cache()
     return {"ok": True, "added": added}
+
+
+@router.post("/admin/api/intent-samples/reset-seed")
+def admin_reset_seed_samples(request: Request):
+    user = get_current_user(request)
+    require_admin_user(user)
+    try:
+        from app.graph.nodes.task_router import invalidate_sample_cache
+        deleted = reset_seed_samples()
+        invalidate_sample_cache()
+        return {"ok": True, "deleted": deleted}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @router.post("/admin/api/reingest")
