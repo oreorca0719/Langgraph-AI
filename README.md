@@ -195,23 +195,100 @@ INJECTION_WINDOW_TURNS=3
 
 ---
 
+## DevOps 전체 플로우
 
-## 배포 파이프라인
-
-`main` 브랜치에 push하면 GitHub Actions가 자동으로 빌드~배포까지 처리합니다.
+### [0단계] 인프라 사전 준비 (최초 1회)
 
 ```
+AWS Console / CLI
+  ├── Amazon ECR       — Docker 이미지 레포지토리 생성
+  ├── AWS App Runner   — ECR 이미지 기반 서비스 생성 + 환경변수 설정
+  ├── Amazon DynamoDB  — 앱 기동 시 테이블 자동 생성 (CREATE_*_TABLE=1)
+  └── Amazon S3        — 사내 문서 원본 업로드 (S3_KNOWLEDGE_BUCKET)
+
+GitHub 레포 → Settings → Secrets and variables → Actions
+  ├── AWS_ACCESS_KEY_ID       IAM 사용자 액세스 키
+  ├── AWS_SECRET_ACCESS_KEY   IAM 사용자 시크릿 키
+  ├── AWS_REGION              ap-northeast-1
+  ├── ECR_REPOSITORY          ECR 레포지토리 이름
+  └── APP_RUNNER_SERVICE_ARN  App Runner 서비스 ARN
+```
+
+> **환경변수** (`.env` 내용)는 App Runner 콘솔 서비스 설정에서 별도 관리합니다.
+> `.env`는 `.gitignore`에 포함되어 있어 배포 이미지에 포함되지 않습니다.
+
+---
+
+### [1단계] 로컬 개발
+
+```bash
+# 의존성 설치
+pip install -r requirements.txt
+
+# 로컬 서버 실행 (.env 파일 필요)
+uvicorn main:app --reload --port 8000
+```
+
+> `knowledge_data/`와 `chroma_db/`는 로컬 테스트 전용입니다.
+> 운영 환경(App Runner)에서는 S3에서 자동 인제스트되며, 재배포 시 초기화됩니다.
+
+---
+
+### [2단계] 배포 트리거
+
+```bash
 git push origin main
-      │
-      ▼
-GitHub Actions (.github/workflows/deploy.yml)
-      │
-      ├── 1. AWS 인증 (IAM 액세스 키)
-      ├── 2. Docker 이미지 빌드
-      ├── 3. Amazon ECR 푸시 (커밋 해시 태그 + latest 태그)
-      │
-      ▼
-App Runner 새 이미지 감지 → 자동 재배포
+```
+
+`main` 브랜치에 push하면 GitHub Actions (`.github/workflows/deploy.yml`)가 자동으로 기동됩니다.
+
+---
+
+### [3단계] GitHub Actions (ubuntu-latest runner)
+
+> Docker Desktop 불필요 — GitHub 서버(runner VM)에서 빌드되므로 로컬 환경과 무관합니다.
+
+```
+runner VM 기동 (ubuntu-latest)
+    │
+    ├── 1. 코드 체크아웃 (actions/checkout@v4)
+    ├── 2. AWS 자격증명 구성 (IAM 액세스 키)
+    ├── 3. Amazon ECR 로그인
+    ├── 4. Docker 이미지 빌드
+    │       docker build -t <ECR>/<REPO>:<커밋 SHA> .
+    ├── 5. ECR 푸시 (커밋 SHA 태그 + latest 태그 동시)
+    ├── 6. App Runner RUNNING 상태 대기 (최대 10분, 30초 간격 폴링)
+    └── 7. App Runner 배포 트리거 (start-deployment)
+```
+
+---
+
+### [4단계] App Runner 자동 재배포
+
+```
+ECR latest 이미지 감지
+    │
+    ▼
+기존 컨테이너 교체 → 새 컨테이너 기동
+```
+
+---
+
+### [5단계] 컨테이너 초기화 (앱 기동 시 자동 수행)
+
+```
+FastAPI 앱 시작 (main.py)
+    │
+    ├── DynamoDB 테이블 자동 생성 (CREATE_*_TABLE=1 환경변수 기준)
+    │       langgraph_users / langgraph_intent_samples
+    │       langgraph_routing_logs / langgraph_checkpoints
+    │
+    ├── S3 → Chroma 문서 인제스트 (AUTO_INGEST=1 환경변수 기준)
+    │       S3_KNOWLEDGE_BUCKET 에서 PDF 다운로드
+    │       → 페이지 단위 청킹 → Gemini 임베딩 → chroma_db/ 저장
+    │
+    └── FastAPI 서버 Ready — 사용자 요청 수신 시작
+```
 
 ---
 
