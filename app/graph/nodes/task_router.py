@@ -21,6 +21,7 @@ _FILE_EXT_RE = re.compile(r"\.(pdf|docx|pptx|xlsx|txt|md)\b", re.I)
 _EMAIL_WRITE_HINTS = ["작성", "초안", "문안", "써줘", "draft", "compose", "작성해", "작성해줘"]
 _EMAIL_EDIT_HINTS = ["수정", "변경", "바꿔", "고쳐", "초안에서", "이 초안", "그 초안", "방금 메일", "메일에서"]
 _FILE_EXTRACT_HINTS = ["추출", "파싱", "텍스트", "본문", "extract", "parse"]
+_SEARCH_INTENT_HINTS = ["탐색", "검색", "찾아줘", "찾아봐", "알려줘", "알려봐", "문서", "자료", "정보", "내용"]
 
 _SAMPLE_VECTORS: Dict[str, List[List[float]]] | None = None
 _SAMPLE_LOCK = threading.Lock()
@@ -162,6 +163,11 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
     if decision == "file_extract":
         if not (_has_file_path_hint(user_input) and _contains_any(user_input, _FILE_EXTRACT_HINTS)):
             decision = "unknown"
+
+    # 검색 의도가 있으면 out_of_scope 차단 해제 → chat으로 전환
+    # 주제가 아닌 의도로 판단: "당뇨병 탐색", "법률 자료 찾아줘" 등
+    if decision == "out_of_scope" and _contains_any(user_input, _SEARCH_INTENT_HINTS):
+        decision = "chat"
 
     debug = {
         "mode": "semantic",
