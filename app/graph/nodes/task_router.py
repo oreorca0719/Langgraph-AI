@@ -69,6 +69,8 @@ def _load_sample_vectors() -> Dict[str, List[List[float]]]:
         vectors: Dict[str, List[List[float]]] = {}
 
         for task, texts in samples.items():
+            if task not in _ALLOWED:
+                continue  # 구버전 카테고리(chat 등) 무시
             vectors[task] = embeddings.embed_documents(texts)
 
         _SAMPLE_VECTORS = vectors
