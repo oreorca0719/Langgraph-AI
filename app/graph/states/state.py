@@ -20,3 +20,6 @@ class GraphState(TypedDict, total=False):
     file_context: Optional[str]
     file_context_name: Optional[str]
     trace_id: str
+    clarification_needed: Optional[bool]
+    clarification_original_input: Optional[str]
+    clarification_done: Optional[bool]

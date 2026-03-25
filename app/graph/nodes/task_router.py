@@ -195,7 +195,51 @@ def task_router_node(state: GraphState) -> GraphState:
     if not user_input:
         trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
                           data={"task_type": "knowledge_search", "mode": "empty_input"})
-        return {"task_type": "knowledge_search", "task_args": task_args}
+        return {"task_type": "knowledge_search", "task_args": task_args,
+                "clarification_done": False}
+
+    # ── clarification 응답 처리 ──────────────────────────────────────────
+    # 이전 턴에서 clarification_needed=True 였다면 현재 입력은 의도 확인 응답.
+    # original_input + 응답을 결합해 재라우팅하고, 한 번만 시도한다.
+    clarification_needed = state.get("clarification_needed") or False
+    clarification_original = (state.get("clarification_original_input") or "").strip()
+
+    if clarification_needed and clarification_original:
+        combined_input = f"{clarification_original} {user_input}"
+        print(f"DEBUG: [Task Router] clarification 재라우팅: {combined_input[:120]}")
+        try:
+            routed, debug, _ = _semantic_route(combined_input)
+            if routed == "unknown":
+                llm_task, llm_debug = llm_intent_fallback(combined_input)
+                debug["llm_fallback"] = llm_debug
+                if llm_task != "unknown":
+                    routed = llm_task
+                    debug["final_source"] = "llm_fallback_clarification"
+                else:
+                    debug["final_source"] = "unknown_after_clarification"
+            merged_args = {**task_args, "routing_debug": debug}
+            trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
+                              data={"task_type": routed, "mode": "clarification_reroute",
+                                    "final_source": debug.get("final_source", "")})
+            return {
+                "task_type": routed,
+                "input_data": combined_input,
+                "task_args": merged_args,
+                "clarification_needed": False,
+                "clarification_original_input": "",
+                "clarification_done": True,
+            }
+        except Exception as e:
+            fallback = _rule_based_route(combined_input)
+            return {
+                "task_type": fallback,
+                "input_data": combined_input,
+                "task_args": {**task_args, "routing_debug": {"mode": "rule_fallback", "reason": str(e)}},
+                "clarification_needed": False,
+                "clarification_original_input": "",
+                "clarification_done": True,
+            }
+    # ────────────────────────────────────────────────────────────────────
 
     try:
         routed, debug, query_vec = _semantic_route(user_input)
@@ -233,7 +277,7 @@ def task_router_node(state: GraphState) -> GraphState:
                               "top1_score": debug.get("top1_score", ""),
                               "margin": debug.get("margin", ""),
                           })
-        return {"task_type": routed, "task_args": merged_args}
+        return {"task_type": routed, "task_args": merged_args, "clarification_done": False}
 
     except Exception as e:
         fallback = _rule_based_route(user_input)
@@ -248,7 +292,7 @@ def task_router_node(state: GraphState) -> GraphState:
         }
         trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
                           data={"task_type": fallback, "mode": "rule_fallback", "error": str(e)})
-        return {"task_type": fallback, "task_args": merged_args}
+        return {"task_type": fallback, "task_args": merged_args, "clarification_done": False}
 
 
 def rejection_node(state: GraphState) -> Dict[str, Any]:
@@ -272,7 +316,10 @@ def route_by_task(state: GraphState) -> str:
     if task == "chat":
         return "knowledge_search"  # backward compat
     if task == "unknown":
-        return "rejection"
+        # clarification 재시도 후에도 unknown이면 rejection, 아니면 clarification
+        if state.get("clarification_done"):
+            return "rejection"
+        return "clarification"
     if task in _ALLOWED:
         return task
     return "knowledge_search"

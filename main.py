@@ -33,6 +33,7 @@ from app.knowledge.ingest import auto_ingest_if_enabled
 from app.graph.subgraphs.chat_graph import build_chat_subgraph
 from app.graph.subgraphs.knowledge_search_graph import build_knowledge_search_subgraph
 from app.graph.subgraphs.ai_guide_graph import build_ai_guide_subgraph
+from app.graph.subgraphs.clarification_graph import build_clarification_subgraph
 from app.graph.subgraphs.file_graph import build_file_subgraph
 from app.graph.subgraphs.email_graph import build_email_subgraph
 from app.graph.subgraphs.rfp_graph import build_rfp_subgraph
@@ -67,6 +68,7 @@ workflow.add_node("file_subgraph", build_file_subgraph())
 workflow.add_node("email_subgraph", build_email_subgraph())
 workflow.add_node("rfp_subgraph", build_rfp_subgraph())
 workflow.add_node("rejection_node", rejection_node)
+workflow.add_node("clarification_subgraph", build_clarification_subgraph())
 
 workflow.set_entry_point("task_router")
 
@@ -82,6 +84,7 @@ workflow.add_conditional_edges(
         "email_draft": "email_subgraph",
         "rfp_draft": "rfp_subgraph",
         "rejection": "rejection_node",
+        "clarification": "clarification_subgraph",
     },
 )
 
@@ -93,6 +96,7 @@ workflow.add_edge("file_subgraph", END)
 workflow.add_edge("email_subgraph", END)
 workflow.add_edge("rfp_subgraph", END)
 workflow.add_edge("rejection_node", END)
+workflow.add_edge("clarification_subgraph", END)
 
 graph_app = workflow.compile(checkpointer=memory)
 
