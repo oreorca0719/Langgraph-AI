@@ -6,7 +6,6 @@ LLM_FALLBACK_ENABLED=0 으로 비활성화 가능.
 """
 from __future__ import annotations
 
-import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, Tuple
 

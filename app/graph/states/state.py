@@ -12,7 +12,6 @@ class GraphState(TypedDict, total=False):
     task_type: str
     task_args: Dict[str, Any]
     messages: Annotated[Sequence[BaseMessage], add]
-    citations: List[Dict[str, Any]]
     citations_used: List[Dict[str, Any]]
     extracted_text: str
     extracted_meta: Dict[str, Any]
