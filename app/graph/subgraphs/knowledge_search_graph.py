@@ -70,11 +70,29 @@ def _format_search_result(docs: List[Document]) -> str:
 
 
 
+def _rewrite_query(original_query: str) -> str:
+    """검색 결과가 없을 때 LLM으로 쿼리를 재작성합니다."""
+    try:
+        from langchain_core.messages import HumanMessage as _HM, SystemMessage as _SM
+        response = get_llm().invoke([
+            _SM(content=(
+                "사용자의 검색 쿼리를 사내 문서 검색에 더 적합하게 재작성하세요.\n"
+                "더 일반적인 용어를 사용하고, 핵심 키워드만 남기세요.\n"
+                "재작성된 쿼리만 출력하세요."
+            )),
+            _HM(content=original_query),
+        ])
+        rewritten = str(response.content).strip()
+        return rewritten if rewritten and rewritten != original_query else ""
+    except Exception:
+        return ""
+
+
 def build_knowledge_search_subgraph():
     """
     사내 문서 검색 전용 서브그래프.
     LLM이 도구 선택을 판단하지 않고 코드에서 직접 RAG 검색 후 LLM 요약.
-    ReAct 패턴 불필요.
+    검색 결과 없으면 쿼리 재작성 후 1회 재시도.
     """
 
     def knowledge_search_node(state: GraphState) -> Dict[str, Any]:
@@ -91,9 +109,20 @@ def build_knowledge_search_subgraph():
                                 "history_raw": len(raw_history),
                                 "history_filtered": len(chat_history)})
 
-        # 코드에서 직접 RAG 검색
+        # 1차 RAG 검색
         docs = _search_chroma(user_input, k=k)
         docs = sanitize_docs(docs, source="rag")
+
+        # 결과 없으면 쿼리 재작성 후 1회 재시도
+        if not docs:
+            rewritten_query = _rewrite_query(user_input)
+            if rewritten_query:
+                print(f"DEBUG: [Knowledge Search] 쿼리 재작성: {rewritten_query[:80]}")
+                trace_buffer.push(trace_id, node="knowledge_search", event="call", label="rewrite",
+                                  data={"rewritten_query": rewritten_query[:80]})
+                docs = _search_chroma(rewritten_query, k=k)
+                docs = sanitize_docs(docs, source="rag_retry")
+
         search_result = _format_search_result(docs)
 
         trace_buffer.push(trace_id, node="knowledge_search", event="call", label="execute",

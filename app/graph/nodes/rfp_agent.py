@@ -106,5 +106,6 @@ def rfp_draft_node(state: GraphState) -> GraphState:
     return {
         **state,
         "draft_rfp": draft_text,
-        "draft_email": None,  # ✅ RFP 실행 시 이메일 잔존 제거
+        "draft_email": None,
+        "pending_task": "rfp_draft",
     }

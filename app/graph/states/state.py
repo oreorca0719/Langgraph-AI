@@ -23,3 +23,4 @@ class GraphState(TypedDict, total=False):
     clarification_needed: Optional[bool]
     clarification_original_input: Optional[str]
     clarification_done: Optional[bool]
+    pending_task: Optional[str]

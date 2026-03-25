@@ -267,6 +267,16 @@ def task_router_node(state: GraphState) -> GraphState:
             debug["decision"] = "file_chat"
             debug["final_source"] = "file_context_fallback"
 
+        # pending_task: 이전 작업(email/rfp) 컨텍스트를 unknown 판정 시 활용
+        pending_task = (state.get("pending_task") or "").strip()
+        if routed == "unknown" and pending_task in _ALLOWED:
+            routed = pending_task
+            debug["decision"] = pending_task
+            debug["final_source"] = "pending_task_context"
+
+        # 명확히 다른 작업이 라우팅되면 pending_task 초기화
+        new_pending = pending_task if routed == pending_task else ""
+
         merged_args = {**task_args, "routing_debug": debug}
 
         trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
@@ -277,7 +287,8 @@ def task_router_node(state: GraphState) -> GraphState:
                               "top1_score": debug.get("top1_score", ""),
                               "margin": debug.get("margin", ""),
                           })
-        return {"task_type": routed, "task_args": merged_args, "clarification_done": False}
+        return {"task_type": routed, "task_args": merged_args,
+                "clarification_done": False, "pending_task": new_pending}
 
     except Exception as e:
         fallback = _rule_based_route(user_input)
@@ -292,7 +303,8 @@ def task_router_node(state: GraphState) -> GraphState:
         }
         trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
                           data={"task_type": fallback, "mode": "rule_fallback", "error": str(e)})
-        return {"task_type": fallback, "task_args": merged_args, "clarification_done": False}
+        return {"task_type": fallback, "task_args": merged_args,
+                "clarification_done": False, "pending_task": ""}
 
 
 def rejection_node(state: GraphState) -> Dict[str, Any]:

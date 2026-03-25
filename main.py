@@ -376,7 +376,8 @@ async def chat_endpoint(request: Request):
             f"- To: {draft.get('to','')}\n"
             f"- CC: {draft.get('cc','')}\n"
             f"- Subject: {draft.get('subject','')}\n\n"
-            f"{draft.get('body','')}"
+            f"{draft.get('body','')}\n\n"
+            f"---\n수정이 필요하시면 '제목 바꿔줘', '수신자 변경해줘' 등으로 말씀해 주세요."
         )
         return {
             "type": "email_draft",
@@ -390,7 +391,7 @@ async def chat_endpoint(request: Request):
         return {
             "type": "rfp_draft",
             "draft": draft,
-            "answer": "RFP 초안이 생성되었습니다.",
+            "answer": "RFP 초안이 생성되었습니다.\n\n---\n수정이 필요하시면 '일정 섹션 수정해줘' 등으로 말씀해 주세요.",
             "sources": [],
         }
 
