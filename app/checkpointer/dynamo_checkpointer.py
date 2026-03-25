@@ -152,12 +152,27 @@ class DynamoDBCheckpointer(BaseCheckpointSaver):
                 return None
             checkpoint = self._deserialize(item["checkpoint_data"])
             metadata   = self._deserialize(item["metadata_data"])
+
+            # pending_writes 복원 (interrupt 상태 재구성에 필요)
+            pending_writes = None
+            pw_raw  = item.get("pending_writes_data")
+            task_id = str(item.get("pending_task_id") or "")
+            if pw_raw and task_id:
+                try:
+                    raw_list = self._deserialize(pw_raw)   # [(channel, value), ...]
+                    pending_writes = [
+                        (task_id, channel, value)
+                        for channel, value in raw_list
+                    ]
+                except Exception as e:
+                    print(f"[CHECKPOINT] pending_writes 역직렬화 실패 (non-fatal): {e}")
+
             return CheckpointTuple(
                 config=config,
                 checkpoint=checkpoint,
                 metadata=metadata,
                 parent_config=None,
-                pending_writes=None,
+                pending_writes=pending_writes,
             )
         except Exception as e:
             print(f"[CHECKPOINT] get_tuple 실패 (thread_id={thread_id}): {e}")
@@ -203,7 +218,22 @@ class DynamoDBCheckpointer(BaseCheckpointSaver):
         writes: Sequence[Tuple[str, Any]],
         task_id: str,
     ) -> None:
-        pass  # 중간 write 영속화 생략
+        """interrupt() 호출 시 발생하는 pending_writes를 DynamoDB에 저장합니다."""
+        if not writes:
+            return
+        thread_id = config["configurable"]["thread_id"]
+        try:
+            serialized = self._serialize([(channel, value) for channel, value in writes])
+            self._table().update_item(
+                Key={"thread_id": thread_id},
+                UpdateExpression="SET pending_writes_data = :pw, pending_task_id = :tid",
+                ExpressionAttributeValues={
+                    ":pw":  serialized,
+                    ":tid": task_id,
+                },
+            )
+        except Exception as e:
+            print(f"[CHECKPOINT] put_writes 실패 (thread_id={thread_id}): {e}")
 
     # ── async 래퍼 (sync 위임) ──
 
