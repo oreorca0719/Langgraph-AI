@@ -36,6 +36,12 @@ router = APIRouter()
 _limiter = Limiter(key_func=get_remote_address, config_filename="__no_env__")
 
 _templates = None
+_graph_app = None
+
+
+def set_graph_app(app) -> None:
+    global _graph_app
+    _graph_app = app
 
 
 # ── CSRF 헬퍼 ────────────────────────────────────────────
@@ -340,6 +346,61 @@ def admin_reset_seed_samples(request: Request):
         return {"ok": True, "deleted": deleted}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.get("/admin/graph", response_class=HTMLResponse)
+def admin_graph(request: Request):
+    user = get_current_user(request)
+    require_admin_user(user)
+    return _render(request, "admin_graph.html", {"user": user})
+
+
+@router.get("/admin/api/graph-mermaid")
+def admin_graph_mermaid(request: Request):
+    user = get_current_user(request)
+    require_admin_user(user)
+    if _graph_app is None:
+        raise HTTPException(status_code=503, detail="graph_app not initialized")
+    try:
+        mermaid_str = _graph_app.get_graph(xray=True).draw_mermaid()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"mermaid": mermaid_str}
+
+
+@router.get("/admin/api/trace/stream")
+async def admin_trace_stream(request: Request):
+    user = get_current_user(request)
+    require_admin_user(user)
+
+    from app.core import trace_buffer
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+    trace_buffer.subscribe(queue)
+
+    async def event_generator():
+        for record in trace_buffer.get_recent(100):
+            payload = json.dumps(record, ensure_ascii=False)
+            yield f"data: {payload}\n\n"
+
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    record = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    payload = json.dumps(record, ensure_ascii=False)
+                    yield f"data: {payload}\n\n"
+                except asyncio.TimeoutError:
+                    yield 'data: {"ping":true}\n\n'
+        finally:
+            trace_buffer.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/admin/api/reingest")

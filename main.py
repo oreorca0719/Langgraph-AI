@@ -43,7 +43,7 @@ import uuid
 
 from app.auth.deps import get_current_user, require_approved_user, require_admin_user
 from app.auth.dynamo import ensure_admin_user, ensure_users_table_if_enabled
-from app.auth.routes import router as auth_router, set_templates
+from app.auth.routes import router as auth_router, set_templates, set_graph_app
 from app.auth.security import hash_password
 from app.auth.routing_log import ensure_routing_log_table, save_routing_log
 from app.core import trace_buffer as _trace_buffer
@@ -99,6 +99,7 @@ workflow.add_edge("rejection_node", END)
 workflow.add_edge("clarification_subgraph", END)
 
 graph_app = workflow.compile(checkpointer=memory)
+set_graph_app(graph_app)
 
 # =========================
 # 템플릿 / 정적 파일

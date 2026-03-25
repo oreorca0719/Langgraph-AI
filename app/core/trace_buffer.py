@@ -1,12 +1,27 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 from collections import deque
 from typing import Any, Dict, List
 
 _buffer: deque = deque(maxlen=300)
+_subscribers: List[asyncio.Queue] = []
 _lock = threading.Lock()
+
+
+def subscribe(queue: asyncio.Queue) -> None:
+    with _lock:
+        _subscribers.append(queue)
+
+
+def unsubscribe(queue: asyncio.Queue) -> None:
+    with _lock:
+        try:
+            _subscribers.remove(queue)
+        except ValueError:
+            pass
 
 
 def push(
@@ -28,6 +43,11 @@ def push(
         }
         with _lock:
             _buffer.append(record)
+            for q in list(_subscribers):
+                try:
+                    q.put_nowait(record)
+                except Exception:
+                    pass
     except Exception:
         pass
 
