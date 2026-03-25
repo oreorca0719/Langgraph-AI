@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import uuid
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -21,26 +22,30 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from langgraph.graph import END, StateGraph
+from langgraph.types import Command
 from app.checkpointer.dynamo_checkpointer import DynamoDBCheckpointer, ensure_checkpoints_table
 
 from app.core.config import has_gemini_api_key
-from app.graph.nodes.task_router import task_router_node, route_by_task, rejection_node
-from app.security.injection_detector import check as injection_check
+from app.graph.states.state import GraphState
+from app.graph.nodes.input_guard import input_guard_node
+from app.graph.nodes.task_router import task_router_node, route_by_task, rejection_node, route_after_input_guard
+from app.graph.nodes.clarification import clarification_node, route_after_clarification
+from app.graph.nodes.human_review import human_review_node, route_after_review
+from app.graph.nodes.knowledge_search import (
+    search_node, quality_check_node, route_after_quality, rewrite_node, answer_node,
+)
+from app.graph.nodes.ai_guide import ai_guide_node
+from app.graph.nodes.file_chat import file_chat_node
+from app.graph.nodes.file_extractor import file_extractor_node
+from app.graph.nodes.email_agent import email_draft_node
+from app.graph.nodes.rfp_agent import (
+    rfp_research_node, rfp_draft_node, rfp_review_node, route_after_rfp_review,
+)
 from app.security.content_sanitizer import sanitize as sanitize_content
 from app.security.output_validator import validate as validate_output
-from app.graph.states.state import GraphState
 from app.knowledge.ingest import auto_ingest_if_enabled
-from app.graph.subgraphs.chat_graph import build_chat_subgraph
-from app.graph.subgraphs.knowledge_search_graph import build_knowledge_search_subgraph
-from app.graph.subgraphs.ai_guide_graph import build_ai_guide_subgraph
-from app.graph.subgraphs.clarification_graph import build_clarification_subgraph
-from app.graph.subgraphs.file_graph import build_file_subgraph
-from app.graph.subgraphs.email_graph import build_email_subgraph
-from app.graph.subgraphs.rfp_graph import build_rfp_subgraph
 
 # Auth (DynamoDB)
-import uuid
-
 from app.auth.deps import get_current_user, require_approved_user, require_admin_user
 from app.auth.dynamo import ensure_admin_user, ensure_users_table_if_enabled
 from app.auth.routes import router as auth_router, set_templates, set_graph_app
@@ -51,55 +56,102 @@ from app.auth.intent_samples import ensure_intent_samples_table, seed_intent_sam
 
 
 # =========================
-# LangGraph 구성 (Subgraph 기반)
+# LangGraph 구성 (플랫 그래프)
 # =========================
 memory = DynamoDBCheckpointer()
 
 workflow = StateGraph(GraphState)
 
-# 1) Router
-workflow.add_node("task_router", task_router_node)
+# ── 노드 등록 ────────────────────────────────────────────────
+workflow.add_node("input_guard",   input_guard_node)
+workflow.add_node("task_router",   task_router_node)
+workflow.add_node("clarification", clarification_node)
+workflow.add_node("rejection",     rejection_node)
+workflow.add_node("search",        search_node)
+workflow.add_node("quality_check", quality_check_node)
+workflow.add_node("rewrite",       rewrite_node)
+workflow.add_node("answer",        answer_node)
+workflow.add_node("ai_guide",      ai_guide_node)
+workflow.add_node("file_chat",     file_chat_node)
+workflow.add_node("file_extract",  file_extractor_node)
+workflow.add_node("email_draft",   email_draft_node)
+workflow.add_node("human_review",  human_review_node)
+workflow.add_node("rfp_research",  rfp_research_node)
+workflow.add_node("rfp_draft",     rfp_draft_node)
+workflow.add_node("rfp_review",    rfp_review_node)
 
-# 2) Subgraphs (각 서브그래프를 runnable로 등록)
-workflow.add_node("knowledge_search_subgraph", build_knowledge_search_subgraph())
-workflow.add_node("ai_guide_subgraph", build_ai_guide_subgraph())
-workflow.add_node("file_chat_subgraph", build_chat_subgraph())
-workflow.add_node("file_subgraph", build_file_subgraph())
-workflow.add_node("email_subgraph", build_email_subgraph())
-workflow.add_node("rfp_subgraph", build_rfp_subgraph())
-workflow.add_node("rejection_node", rejection_node)
-workflow.add_node("clarification_subgraph", build_clarification_subgraph())
+workflow.set_entry_point("input_guard")
 
-workflow.set_entry_point("task_router")
+# ── 조건부 엣지 ──────────────────────────────────────────────
+workflow.add_conditional_edges(
+    "input_guard",
+    route_after_input_guard,
+    {"rejection": "rejection", "task_router": "task_router"},
+)
 
-# 3) Router -> task_type에 따라 subgraph로 분기
 workflow.add_conditional_edges(
     "task_router",
     route_by_task,
     {
-        "knowledge_search": "knowledge_search_subgraph",
-        "ai_guide": "ai_guide_subgraph",
-        "file_chat": "file_chat_subgraph",
-        "file_extract": "file_subgraph",
-        "email_draft": "email_subgraph",
-        "rfp_draft": "rfp_subgraph",
-        "rejection": "rejection_node",
-        "clarification": "clarification_subgraph",
+        "knowledge_search": "search",
+        "ai_guide":         "ai_guide",
+        "file_chat":        "file_chat",
+        "file_extract":     "file_extract",
+        "email_draft":      "email_draft",
+        "rfp_draft":        "rfp_research",
+        "rejection":        "rejection",
+        "clarification":    "clarification",
     },
 )
 
-# 4) 각 subgraph 완료 후 END로 연결
-workflow.add_edge("knowledge_search_subgraph", END)
-workflow.add_edge("ai_guide_subgraph", END)
-workflow.add_edge("file_chat_subgraph", END)
-workflow.add_edge("file_subgraph", END)
-workflow.add_edge("email_subgraph", END)
-workflow.add_edge("rfp_subgraph", END)
-workflow.add_edge("rejection_node", END)
-workflow.add_edge("clarification_subgraph", END)
+# clarification → rejection or task_router (순환)
+workflow.add_conditional_edges(
+    "clarification",
+    route_after_clarification,
+    {"rejection": "rejection", "task_router": "task_router"},
+)
+
+# knowledge search 순환: search → quality_check → (answer | rewrite → search)
+workflow.add_edge("search", "quality_check")
+workflow.add_conditional_edges(
+    "quality_check",
+    route_after_quality,
+    {"answer": "answer", "rewrite": "rewrite"},
+)
+workflow.add_edge("rewrite", "search")
+
+# RFP 3-에이전트 체인: research → draft → review → (rfp_draft | human_review)
+workflow.add_edge("rfp_research", "rfp_draft")
+workflow.add_edge("rfp_draft", "rfp_review")
+workflow.add_conditional_edges(
+    "rfp_review",
+    route_after_rfp_review,
+    {"rfp_draft": "rfp_draft", "human_review": "human_review"},
+)
+
+# email/rfp → human_review → (end | task_router | email_draft | rfp_draft)
+workflow.add_edge("email_draft", "human_review")
+workflow.add_conditional_edges(
+    "human_review",
+    route_after_review,
+    {
+        "end":        END,
+        "task_router": "task_router",
+        "email_draft": "email_draft",
+        "rfp_draft":   "rfp_draft",
+    },
+)
+
+# ── 종료 엣지 ────────────────────────────────────────────────
+workflow.add_edge("answer",      END)
+workflow.add_edge("ai_guide",    END)
+workflow.add_edge("file_chat",   END)
+workflow.add_edge("file_extract", END)
+workflow.add_edge("rejection",   END)
 
 graph_app = workflow.compile(checkpointer=memory)
 set_graph_app(graph_app)
+
 
 # =========================
 # 템플릿 / 정적 파일
@@ -111,17 +163,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 초기 관리자 자동 생성 (DynamoDB)
 # =========================
 def ensure_initial_admin() -> None:
-    """환경변수로 초기 관리자 계정을 DynamoDB에 자동 생성/보정합니다.
-
-    - ADMIN_EMAIL: 필수
-    - ADMIN_PASSWORD: 필수
-    - ADMIN_NAME: 선택 (기본값 'Admin')
-
-    동작:
-    - 해당 계정이 없으면 생성 (approved=True, is_admin=True)
-    - 이미 존재하면 approved/is_admin을 True로 보정 (비밀번호는 변경하지 않음)
-    """
-
+    """환경변수로 초기 관리자 계정을 DynamoDB에 자동 생성/보정합니다."""
     admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     admin_password = os.getenv("ADMIN_PASSWORD", "")
     admin_name = (os.getenv("ADMIN_NAME", "Admin") or "Admin").strip()
@@ -129,7 +171,6 @@ def ensure_initial_admin() -> None:
     if not admin_email or not admin_password:
         return
 
-    # bcrypt 72 bytes 제한으로 인해 해시가 실패할 수 있어서 미리 검증
     try:
         pw_hash = hash_password(admin_password)
     except Exception as e:
@@ -140,7 +181,6 @@ def ensure_initial_admin() -> None:
         ensure_admin_user(email=admin_email, name=admin_name, password_hash=pw_hash)
         print(f"[INIT_ADMIN] OK: {admin_email}")
     except Exception as e:
-        # DynamoDB 연결 불가 등 예외 시 요청 흐름에 영향 없도록 무시
         print(f"[INIT_ADMIN] SKIP: ensure_admin_user failed ({e})")
 
 
@@ -175,7 +215,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("SESSION_SECRET", "dev-secret-change-me"),
-    max_age=int(os.getenv("SESSION_MAX_AGE", "28800")),  # 기본 8시간
+    max_age=int(os.getenv("SESSION_MAX_AGE", "28800")),
 )
 
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), name="static")
@@ -183,7 +223,6 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 app.state.templates = templates
 
-# auth 라우터에 템플릿 주입 (routes.py가 set_templates 호출)
 set_templates(templates)
 app.include_router(auth_router)
 
@@ -263,7 +302,8 @@ async def home(request: Request):
     })
 
 
-# Chat Page (메인 사용자 화면)
+# =========================
+# Chat Page
 # =========================
 @app.get("/chat", response_class=HTMLResponse)
 async def index(request: Request):
@@ -292,7 +332,7 @@ async def chat_reset(request: Request):
 
 
 # =========================
-# Chat Endpoint (메인 사용자 화면)
+# Chat Endpoint (interrupt 패턴)
 # =========================
 @app.post("/chat")
 async def chat_endpoint(request: Request):
@@ -306,48 +346,57 @@ async def chat_endpoint(request: Request):
     if len(user_input) > _max_input:
         raise HTTPException(status_code=400, detail=f"입력이 너무 깁니다. 최대 {_max_input}자까지 허용됩니다.")
 
-    # -------------------------
-    # 1) 보안 필터 (injection 탐지)
-    # -------------------------
-    trace_id = str(uuid.uuid4())
-    thread_id = str(user.get("user_id") or user.get("email"))
-    config = {"configurable": {"thread_id": thread_id}}
-
-    try:
-        from langchain_core.messages import HumanMessage as _HM
-        _snap_values = getattr(graph_app.get_state(config), "values", None) or {}
-        _recent_user_turns = [
-            msg.content for msg in (_snap_values.get("messages") or [])
-            if isinstance(msg, _HM) and isinstance(msg.content, str)
-        ][-3:]
-    except Exception:
-        _recent_user_turns = []
-
-    if injection_check(user_input, _recent_user_turns):
-        return JSONResponse({
-            "type": "chat",
-            "answer": "해당 요청에는 응하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
-            "sources": [],
-        })
-
     _ensure_llm_ready_or_503()
 
-    # -------------------------
-    # 2) 그래프 입력 (라우팅은 task_router_node가 담당)
-    # -------------------------
-    inputs = {
-        "trace_id": trace_id,
-        "input_data": user_input,
-        "task_type": "",
-        "task_args": {},
+    trace_id  = str(uuid.uuid4())
+    thread_id = str(user.get("user_id") or user.get("email"))
+    config    = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": 15,
     }
 
-    # -------------------------
-    # 4) 그래프 실행
-    # -------------------------
-    result = graph_app.invoke(inputs, config=config)
+    # ── interrupt 재개 여부 확인 ──────────────────────────────
+    has_interrupt = False
+    try:
+        current_state = graph_app.get_state(config)
+        if current_state and current_state.tasks:
+            has_interrupt = any(t.interrupts for t in current_state.tasks)
+    except Exception:
+        pass
 
-    # 라우팅 로그 저장 (execute 기준 — 실제 실행된 라우팅 데이터)
+    # ── 그래프 실행 ───────────────────────────────────────────
+    if has_interrupt:
+        result = graph_app.invoke(Command(resume=user_input), config=config)
+    else:
+        inputs = {
+            "trace_id":  trace_id,
+            "input_data": user_input,
+            "task_type": "",
+            "task_args": {},
+        }
+        result = graph_app.invoke(inputs, config=config)
+
+    # ── interrupt 발생 확인 (invoke 후) ───────────────────────
+    try:
+        new_state = graph_app.get_state(config)
+        pending = []
+        if new_state and new_state.tasks:
+            for task in new_state.tasks:
+                pending.extend(task.interrupts or [])
+    except Exception:
+        pending = []
+
+    if pending:
+        iv = pending[0]
+        interrupt_data = iv.value if hasattr(iv, "value") else iv
+        return JSONResponse({
+            "type":           "interrupt",
+            "interrupt_type": interrupt_data.get("type", ""),
+            "message":        interrupt_data.get("message", ""),
+            "hint":           interrupt_data.get("hint", ""),
+        })
+
+    # ── 라우팅 로그 저장 ──────────────────────────────────────
     save_routing_log(
         user_id=str(user.get("user_id") or user.get("email")),
         input_text=user_input,
@@ -355,17 +404,15 @@ async def chat_endpoint(request: Request):
         routing_debug=(result.get("task_args") or {}).get("routing_debug", {}),
     )
 
-    # -------------------------
-    # 5) 응답의 "최종 결정"값으로 task_type 확정
-    # -------------------------
+    # ── 응답 포맷팅 ───────────────────────────────────────────
     task_type = (result.get("task_type") or "").strip()
 
     if task_type == "file_extract":
         text = (result.get("extracted_text") or "")[:20000]
         return {
-            "type": "file_extract",
-            "meta": result.get("extracted_meta"),
-            "text": text,
+            "type":   "file_extract",
+            "meta":   result.get("extracted_meta"),
+            "text":   text,
             "answer": "파일 추출이 완료되었습니다.",
             "sources": [],
         }
@@ -381,8 +428,8 @@ async def chat_endpoint(request: Request):
             f"---\n수정이 필요하시면 '제목 바꿔줘', '수신자 변경해줘' 등으로 말씀해 주세요."
         )
         return {
-            "type": "email_draft",
-            "draft": draft,
+            "type":   "email_draft",
+            "draft":  draft,
             "answer": preview,
             "sources": [],
         }
@@ -390,15 +437,13 @@ async def chat_endpoint(request: Request):
     if task_type == "rfp_draft":
         draft = result.get("draft_rfp") or ""
         return {
-            "type": "rfp_draft",
-            "draft": draft,
+            "type":   "rfp_draft",
+            "draft":  draft,
             "answer": "RFP 초안이 생성되었습니다.\n\n---\n수정이 필요하시면 '일정 섹션 수정해줘' 등으로 말씀해 주세요.",
             "sources": [],
         }
 
-    # -------------------------
-    # 6) 기본 chat 응답
-    # -------------------------
+    # 기본 chat 응답
     raw_answer = result.get("messages", [])[-1].content if result.get("messages") else ""
 
     if isinstance(raw_answer, list) and len(raw_answer) > 0:
@@ -406,7 +451,6 @@ async def chat_endpoint(request: Request):
     else:
         final_text = str(raw_answer)
 
-    # ── [4차] 출력 검증 ──
     _, final_text = validate_output(final_text)
 
     def _extract_cited_ids(text: str) -> set[int]:
@@ -414,15 +458,14 @@ async def chat_endpoint(request: Request):
 
     cited_ids = _extract_cited_ids(final_text)
     all_sources = result.get("citations_used") or result.get("citations") or []
-
     filtered_sources = [
         s for s in all_sources
         if isinstance(s, dict) and isinstance(s.get("id"), int) and s.get("id") in cited_ids
     ]
 
     return {
-        "type": "chat",
-        "answer": final_text,
+        "type":    "chat",
+        "answer":  final_text,
         "sources": filtered_sources or [],
     }
 
@@ -434,20 +477,18 @@ _UPLOAD_ALLOWED_SUFFIXES = {".txt", ".md", ".pdf", ".docx", ".xlsx", ".xlsm", ".
 _UPLOAD_MAX_BYTES = 20 * 1024 * 1024  # 20MB
 _FILE_CONTEXT_MAX_CHARS = int(os.getenv("FILE_CONTEXT_MAX_CHARS", "8000"))
 
-# 확장자 → 허용 매직 바이트 (오프셋, 바이트열) 목록
 _MAGIC_SIGNATURES: dict[str, list[tuple[int, bytes]]] = {
     ".pdf":  [(0, b"%PDF")],
     ".docx": [(0, b"PK\x03\x04")],
     ".xlsx": [(0, b"PK\x03\x04")],
     ".xlsm": [(0, b"PK\x03\x04")],
     ".pptx": [(0, b"PK\x03\x04")],
-    ".txt":  [],   # 텍스트는 매직 바이트 없음 → 검사 생략
+    ".txt":  [],
     ".md":   [],
 }
 
 
 def _verify_mime(content: bytes, suffix: str) -> bool:
-    """파일 앞부분 매직 바이트가 확장자와 일치하는지 확인합니다."""
     sigs = _MAGIC_SIGNATURES.get(suffix, [])
     if not sigs:
         return True
@@ -455,7 +496,6 @@ def _verify_mime(content: bytes, suffix: str) -> bool:
 
 
 def _get_chat_thread_config(user: dict) -> dict:
-    """사용자의 chat 세션 thread config 반환 (file_context 저장 시 사용)."""
     base_thread = str(user.get("user_id") or user.get("email"))
     scope = (os.getenv("THREAD_CONTEXT_SCOPE", "user") or "user").strip().lower()
     thread_id = f"{base_thread}:chat" if scope == "task" else base_thread
@@ -504,7 +544,6 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"파일 추출 실패: {e}")
 
-    # ── [3차] 파일 내용 sanitize ──
     text = sanitize_content(text, source=f"upload:{file.filename}")
 
     summary = None
@@ -535,7 +574,6 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
                 raw = " ".join(p.get("text", "") for p in raw if isinstance(p, dict))
             raw = str(raw).strip()
 
-            # JSON 블록 추출 (```json ... ``` 감싸진 경우 대응)
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
@@ -548,7 +586,6 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         except Exception as e:
             print(f"[UPLOAD] LLM 분석 실패: {type(e).__name__}: {e}")
 
-    # 파일 컨텍스트 + 검색 키워드를 사용자 thread State에 저장
     try:
         config = _get_chat_thread_config(user)
         graph_app.update_state(config, {
@@ -594,7 +631,6 @@ async def chat_with_file(
     from app.core.config import get_llm
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    # ── [3차] 파일 내용 sanitize ──
     raw_text = sanitize_content(raw_text, source=f"chat-with-file:{file.filename}")
 
     file_context = raw_text.strip()
@@ -625,32 +661,6 @@ async def chat_with_file(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM 호출 실패: {e}")
 
-    # 키워드 추출 (QA용 LLM 호출과 별개로 소형 호출)
-    kw_list: list[str] = []
-    try:
-        import json as _json
-        from langchain_core.messages import SystemMessage as _SM, HumanMessage as _HM
-        kw_resp = get_llm().invoke([
-            _SM(content=(
-                "아래 문서에서 내부 문서 DB 검색에 활용할 핵심 개념·용어를 10개 이내로 추출하세요.\n"
-                "반드시 JSON 배열 형식으로만 응답하세요. 예: [\"키워드1\", \"키워드2\"]"
-            )),
-            _HM(content=raw_text.strip()[:_FILE_CONTEXT_MAX_CHARS]),
-        ])
-        kw_raw = kw_resp.content
-        if isinstance(kw_raw, list):
-            kw_raw = " ".join(p.get("text", "") for p in kw_raw if isinstance(p, dict))
-        kw_raw = str(kw_raw).strip()
-        if kw_raw.startswith("```"):
-            kw_raw = kw_raw.split("```")[1]
-            if kw_raw.startswith("json"):
-                kw_raw = kw_raw[4:]
-            kw_raw = kw_raw.strip()
-        kw_list = [str(k) for k in _json.loads(kw_raw) if k]
-    except Exception as e:
-        print(f"[CHAT-WITH-FILE] 키워드 추출 실패 (non-fatal): {e}")
-
-    # 파일 컨텍스트 + 검색 키워드를 사용자 thread State에 저장
     try:
         config = _get_chat_thread_config(user)
         graph_app.update_state(config, {
@@ -665,7 +675,6 @@ async def chat_with_file(
 
 @app.get("/admin/api/traces")
 def admin_traces_api(request: Request):
-    from app.auth.deps import require_admin_user
     user = get_current_user(request)
     require_admin_user(user)
     from datetime import datetime
@@ -676,7 +685,6 @@ def admin_traces_api(request: Request):
     return traces
 
 
-# favicon 404 방지 (선택)
 @app.get("/favicon.ico")
 def favicon():
     return HTMLResponse(status_code=204)

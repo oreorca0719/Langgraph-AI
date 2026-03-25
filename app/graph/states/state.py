@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from typing import TypedDict, Annotated, Sequence, List, Optional, Dict, Any
@@ -8,19 +7,32 @@ from langchain_core.messages import BaseMessage
 
 
 class GraphState(TypedDict, total=False):
+    # ── 기본 입출력 ──────────────────────────────────────────
     input_data: str
     task_type: str
     task_args: Dict[str, Any]
     messages: Annotated[Sequence[BaseMessage], add]
     citations_used: List[Dict[str, Any]]
+
+    # ── 파일 ────────────────────────────────────────────────
     extracted_text: str
     extracted_meta: Dict[str, Any]
-    draft_email: Dict[str, Any]
-    draft_rfp: str
     file_context: Optional[str]
     file_context_name: Optional[str]
+
+    # ── 초안 ────────────────────────────────────────────────
+    draft_email: Dict[str, Any]
+    draft_rfp: str
+
+    # ── RFP 다중 에이전트 ────────────────────────────────────
+    rfp_research: str           # research_node 수집 결과
+    rfp_review_notes: str       # review_node 검토 의견
+
+    # ── 순환 / 상태 제어 ─────────────────────────────────────
+    retry_count: int            # knowledge search 재시도 횟수
+    review_action: str          # "approve" | "revise" | "switch"
+    current_task: str           # human_review switch 감지 기준
+    interrupt_type: str         # "clarification" | "human_review"
+
+    # ── 트레이스 ─────────────────────────────────────────────
     trace_id: str
-    clarification_needed: Optional[bool]
-    clarification_original_input: Optional[str]
-    clarification_done: Optional[bool]
-    pending_task: Optional[str]
