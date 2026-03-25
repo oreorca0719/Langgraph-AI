@@ -26,6 +26,10 @@ _FILE_EXTRACT_HINTS = ["추출", "파싱", "텍스트", "본문", "extract", "pa
 _SAMPLE_VECTORS: Dict[str, List[List[float]]] | None = None
 _SAMPLE_LOCK = threading.Lock()
 
+_DRAFT_RECALL_HINTS = ["이전", "작성한", "찾아줘", "보여줘", "다시", "아까", "초안", "방금"]
+_RFP_RECALL_HINTS = ["rfp", "제안요청서", "요구사항 정의서"]
+_EMAIL_RECALL_HINTS = ["이메일", "메일", "email"]
+
 
 def _contains_any(text: str, keywords: List[str]) -> bool:
     t = (text or "").lower()
@@ -197,6 +201,23 @@ def task_router_node(state: GraphState) -> GraphState:
                           data={"task_type": "knowledge_search", "mode": "empty_input"})
         return {"task_type": "knowledge_search", "task_args": task_args,
                 "clarification_done": False}
+
+    # ── draft 재조회 감지 ────────────────────────────────────────────────
+    # State에 저장된 draft를 참조하는 요청은 ChromaDB 검색 전에 처리
+    if _contains_any(user_input, _DRAFT_RECALL_HINTS):
+        draft_rfp_exists = bool((state.get("draft_rfp") or "").strip())
+        draft_email_exists = bool(state.get("draft_email"))
+        if draft_rfp_exists and _contains_any(user_input, _RFP_RECALL_HINTS):
+            trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
+                              data={"task_type": "rfp_draft", "mode": "draft_recall"})
+            return {"task_type": "rfp_draft", "task_args": task_args,
+                    "clarification_done": False}
+        if draft_email_exists and _contains_any(user_input, _EMAIL_RECALL_HINTS):
+            trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
+                              data={"task_type": "email_draft", "mode": "draft_recall"})
+            return {"task_type": "email_draft", "task_args": task_args,
+                    "clarification_done": False}
+    # ────────────────────────────────────────────────────────────────────
 
     # ── clarification 응답 처리 ──────────────────────────────────────────
     # 이전 턴에서 clarification_needed=True 였다면 현재 입력은 의도 확인 응답.

@@ -60,6 +60,14 @@ def rfp_draft_node(state: GraphState) -> GraphState:
     trace_buffer.push(trace_id, node="rfp_draft", event="enter", label="execute",
                       data={"input": user_input[:200], "has_extracted": bool(extracted)})
 
+    # draft 재조회 요청 처리: task_router가 draft_recall 모드로 라우팅한 경우
+    existing_rfp = (state.get("draft_rfp") or "").strip()
+    _RECALL_HINTS = ["이전", "작성한", "찾아줘", "보여줘", "다시", "아까", "초안", "방금"]
+    if existing_rfp and any(k in user_input for k in _RECALL_HINTS):
+        trace_buffer.push(trace_id, node="rfp_draft", event="exit", label="execute",
+                          data={"mode": "draft_recall", "draft_len": len(existing_rfp)})
+        return {**state, "draft_rfp": existing_rfp, "draft_email": None, "pending_task": "rfp_draft"}
+
     llm = get_llm()
 
     prompt = ChatPromptTemplate.from_messages(

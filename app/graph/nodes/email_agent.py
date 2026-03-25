@@ -183,6 +183,13 @@ def email_draft_node(state: GraphState) -> GraphState:
     trace_buffer.push(trace_id, node="email_draft", event="enter", label="execute",
                       data={"input": user_input[:200], "has_prev_draft": bool(prev_draft)})
 
+    # draft 재조회 요청 처리: task_router가 draft_recall 모드로 라우팅한 경우
+    _RECALL_HINTS = ["이전", "작성한", "찾아줘", "보여줘", "다시", "아까", "초안", "방금"]
+    if prev_draft and any(k in user_input for k in _RECALL_HINTS):
+        trace_buffer.push(trace_id, node="email_draft", event="exit", label="execute",
+                          data={"mode": "draft_recall"})
+        return {**state, "draft_email": prev_draft, "draft_rfp": None, "pending_task": "email_draft"}
+
     # Deterministic edit path: patch existing draft before invoking LLM.
     patched = _patch_existing_draft(prev_draft, user_input, args)
     if patched is not None:
