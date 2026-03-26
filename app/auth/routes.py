@@ -11,6 +11,12 @@ from typing import Optional
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 _NAME_RE  = re.compile(r"^[가-힣a-zA-Z]{2,20}$")
 
+_READONLY_EMAIL = "testuser@test.co.kr"
+
+
+def _is_readonly(user: dict) -> bool:
+    return (user.get("email") or "").strip().lower() == _READONLY_EMAIL
+
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from jinja2 import TemplateNotFound
@@ -141,13 +147,15 @@ def admin_users(request: Request):
     users = list_users(limit=300)
     users.sort(key=lambda x: (bool(x.get("approved", False)), x.get("email", "")))
     csrf_token = _get_csrf_token(request)
-    return _render(request, "admin_users.html", {"user": user, "users": users, "csrf_token": csrf_token})
+    return _render(request, "admin_users.html", {"user": user, "users": users, "csrf_token": csrf_token, "read_only": _is_readonly(user)})
 
 
 @router.post("/admin/users/approve")
 def admin_approve(request: Request, email: str = Form(...), csrf_token: str = Form(...)):
     user = get_current_user(request)
     require_admin_user(user)
+    if _is_readonly(user):
+        return RedirectResponse(url="/admin/users", status_code=303)
     _verify_csrf(request, csrf_token)
     approve_user(email=email, approved=True)
     return RedirectResponse(url="/admin/users", status_code=303)
@@ -157,6 +165,8 @@ def admin_approve(request: Request, email: str = Form(...), csrf_token: str = Fo
 def admin_reject(request: Request, email: str = Form(...), csrf_token: str = Form(...)):
     user = get_current_user(request)
     require_admin_user(user)
+    if _is_readonly(user):
+        return RedirectResponse(url="/admin/users", status_code=303)
     _verify_csrf(request, csrf_token)
     if user.get("email") == email.strip().lower():
         return RedirectResponse(url="/admin/users", status_code=303)
@@ -173,6 +183,8 @@ def admin_toggle_admin(
 ):
     user = get_current_user(request)
     require_admin_user(user)
+    if _is_readonly(user):
+        return RedirectResponse(url="/admin/users", status_code=303)
     _verify_csrf(request, csrf_token)
     target_email = email.strip().lower()
     if user.get("email") == target_email and make_admin.strip() != "1":
@@ -190,6 +202,8 @@ def admin_set_department(
 ):
     user = get_current_user(request)
     require_admin_user(user)
+    if _is_readonly(user):
+        return RedirectResponse(url="/admin/users", status_code=303)
     _verify_csrf(request, csrf_token)
     set_department(email=email, department=department)
     return RedirectResponse(url="/admin/users", status_code=303)
@@ -199,6 +213,8 @@ def admin_set_department(
 def admin_delete(request: Request, email: str = Form(...), csrf_token: str = Form(...)):
     user = get_current_user(request)
     require_admin_user(user)
+    if _is_readonly(user):
+        return RedirectResponse(url="/admin/users", status_code=303)
     _verify_csrf(request, csrf_token)
     target_email = email.strip().lower()
     if user.get("email") == target_email:
@@ -213,7 +229,7 @@ def admin_delete(request: Request, email: str = Form(...), csrf_token: str = For
 def admin_home(request: Request):
     user = get_current_user(request)
     require_admin_user(user)
-    return _render(request, "admin_home.html", {"user": user})
+    return _render(request, "admin_home.html", {"user": user, "read_only": _is_readonly(user)})
 
 
 # ── 모니터 대시보드 ─────────────────────────────────────
@@ -222,7 +238,7 @@ def admin_home(request: Request):
 def admin_monitor(request: Request):
     user = get_current_user(request)
     require_admin_user(user)
-    return _render(request, "admin_monitor.html", {"user": user})
+    return _render(request, "admin_monitor.html", {"user": user, "read_only": _is_readonly(user)})
 
 
 @router.get("/admin/api/routing-logs")
@@ -323,6 +339,8 @@ def admin_routing_stats_api(request: Request):
 async def admin_add_intent_sample(request: Request):
     user = get_current_user(request)
     require_admin_user(user)
+    if _is_readonly(user):
+        raise HTTPException(status_code=403, detail="읽기 전용 계정입니다.")
     body = await request.json()
     task = (body.get("task") or "").strip()
     text = (body.get("text") or "").strip()
@@ -339,6 +357,8 @@ async def admin_add_intent_sample(request: Request):
 def admin_reset_seed_samples(request: Request):
     user = get_current_user(request)
     require_admin_user(user)
+    if _is_readonly(user):
+        raise HTTPException(status_code=403, detail="읽기 전용 계정입니다.")
     try:
         from app.graph.nodes.task_router import invalidate_sample_cache
         deleted = reset_seed_samples()
@@ -352,7 +372,7 @@ def admin_reset_seed_samples(request: Request):
 def admin_graph(request: Request):
     user = get_current_user(request)
     require_admin_user(user)
-    return _render(request, "admin_graph.html", {"user": user})
+    return _render(request, "admin_graph.html", {"user": user, "read_only": _is_readonly(user)})
 
 
 @router.get("/admin/api/graph-mermaid")
@@ -407,6 +427,8 @@ async def admin_trace_stream(request: Request):
 def admin_reingest(request: Request):
     user = get_current_user(request)
     require_admin_user(user)
+    if _is_readonly(user):
+        raise HTTPException(status_code=403, detail="읽기 전용 계정입니다.")
     try:
         from app.knowledge.ingest import auto_ingest_if_enabled
         auto_ingest_if_enabled()

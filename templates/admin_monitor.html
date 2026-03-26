@@ -436,6 +436,12 @@
       </div>
     </div>
 
+    {% if read_only %}
+    <div style="margin-bottom:16px;padding:10px 14px;background:rgba(255,201,102,0.1);border:1px solid rgba(255,201,102,0.3);border-radius:8px;font-size:13px;color:#ffc966;">
+      읽기 전용 모드 — 데이터 조회만 가능합니다.
+    </div>
+    {% endif %}
+
     <div class="monitor-grid">
 
       <!-- Live Log -->
@@ -456,7 +462,7 @@
       <div class="card">
         <div class="card-head">
           <span class="card-title">라우팅 결정 이력</span>
-          <div style="display:flex;gap:8px"><button class="refresh-btn" id="refresh-routing">새로고침</button><button class="refresh-btn" id="delete-all-btn" style="color:var(--danger);border-color:rgba(255,111,143,0.4)">전체 삭제</button></div>
+          <div style="display:flex;gap:8px"><button class="refresh-btn" id="refresh-routing">새로고침</button>{% if not read_only %}<button class="refresh-btn" id="delete-all-btn" style="color:var(--danger);border-color:rgba(255,111,143,0.4)">전체 삭제</button>{% endif %}</div>
         </div>
         <div class="routing-table-wrap">
           <table class="routing-table">
@@ -548,6 +554,7 @@
   </div>
 
   <script>
+    const READ_ONLY = {{ 'true' if read_only else 'false' }};
     const logBox = document.getElementById('log-box');
     const statusDot = document.getElementById('status-dot');
     const scrollToggle = document.getElementById('scroll-toggle');
@@ -648,9 +655,9 @@
               <select class="task-select" data-text="${escapeHtml(log.input_text)}">
                 ${TASK_OPTIONS.map(t => `<option value="${t}">${t}</option>`).join('')}
               </select>
-              <button class="assign-btn reclassify-btn" data-text="${escapeHtml(log.input_text)}" style="margin-left:4px">추가</button>
+              ${READ_ONLY ? '' : `<button class="assign-btn reclassify-btn" data-text="${escapeHtml(log.input_text)}" style="margin-left:4px">추가</button>`}
             </td>
-            <td><button class="icon-btn delete-row-btn" data-id="${log.log_id}">삭제</button></td>
+            <td>${READ_ONLY ? '<span style="color:var(--text-dim)">—</span>' : `<button class="icon-btn delete-row-btn" data-id="${log.log_id}">삭제</button>`}</td>
           </tr>
         `).join('');
       } catch (e) {
@@ -853,7 +860,7 @@
               </select>
             </td>
             <td>
-              <button class="assign-btn" data-text="${escapeHtml(c.input_text)}">추가</button>
+              ${READ_ONLY ? '<span style="color:var(--text-dim)">—</span>' : `<button class="assign-btn" data-text="${escapeHtml(c.input_text)}">추가</button>`}
             </td>
           </tr>
         `).join('');

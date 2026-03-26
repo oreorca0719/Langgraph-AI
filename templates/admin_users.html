@@ -21,6 +21,12 @@
       </div>
     </header>
 
+    {% if read_only %}
+    <div style="margin-bottom:16px;padding:10px 14px;background:rgba(255,201,102,0.1);border:1px solid rgba(255,201,102,0.3);border-radius:8px;font-size:13px;color:#ffc966;">
+      읽기 전용 모드 — 데이터 조회만 가능합니다.
+    </div>
+    {% endif %}
+
     <div class="table-wrap">
       <table class="admin-table">
         <thead>
@@ -39,16 +45,21 @@
             <td>{{ u.email }}</td>
             <td>{{ u.name }}</td>
             <td>
+              {% if not read_only %}
               <form method="post" action="/admin/users/set-department" class="inline-form">
                 <input type="hidden" name="email" value="{{ u.email }}" />
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
                 <input type="text" name="department" value="{{ u.department or '' }}" placeholder="소속 입력" style="width:100px;" />
                 <button type="submit">저장</button>
               </form>
+              {% else %}
+              <span style="color:var(--text-dim);font-size:12px;">{{ u.department or '-' }}</span>
+              {% endif %}
             </td>
             <td>{{ u.approved }}</td>
             <td>{{ u.is_admin }}</td>
             <td class="actions-cell">
+              {% if not read_only %}
               {% if not u.approved %}
               <form method="post" action="/admin/users/approve" class="inline-form">
                 <input type="hidden" name="email" value="{{ u.email }}" />
@@ -84,6 +95,9 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
                 <button type="submit" class="danger-btn">삭제</button>
               </form>
+              {% else %}
+              <span style="color:var(--text-dim);font-size:12px;">—</span>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}
