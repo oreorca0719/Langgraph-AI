@@ -356,11 +356,16 @@ async def chat_endpoint(request: Request):
     }
 
     # ── interrupt 재개 여부 확인 ──────────────────────────────
+    _INTERRUPT_NODES = {"human_review", "clarification"}
     has_interrupt = False
     try:
         current_state = graph_app.get_state(config)
-        if current_state and current_state.tasks:
-            has_interrupt = any(t.interrupts for t in current_state.tasks)
+        if current_state:
+            # 1차: tasks.interrupts 확인 (put_writes 정상 동작 시)
+            has_interrupt = any(t.interrupts for t in (current_state.tasks or []))
+            # 2차: state.next가 interrupt 노드 중 하나를 가리키면 interrupt 상태
+            if not has_interrupt:
+                has_interrupt = any(n in _INTERRUPT_NODES for n in (current_state.next or ()))
     except Exception:
         pass
 

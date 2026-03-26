@@ -248,7 +248,7 @@ class DynamoDBCheckpointer(BaseCheckpointSaver):
         return self.put(config, checkpoint, metadata, new_versions)
 
     async def aput_writes(self, config, writes, task_id) -> None:
-        pass
+        self.put_writes(config, writes, task_id)
 
     def delete(self, thread_id: str) -> None:
         """thread_id에 해당하는 체크포인트를 삭제합니다."""
