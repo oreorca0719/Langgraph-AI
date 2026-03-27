@@ -667,7 +667,7 @@
 
     refreshBtn.addEventListener('click', loadRoutingLogs);
 
-    document.getElementById('delete-all-btn').addEventListener('click', async () => {
+    document.getElementById('delete-all-btn')?.addEventListener('click', async () => {
       if (!confirm('라우팅 로그 전체를 삭제하시겠습니까?')) return;
       await fetch('/admin/api/routing-logs', { method: 'DELETE' });
       loadRoutingLogs();
