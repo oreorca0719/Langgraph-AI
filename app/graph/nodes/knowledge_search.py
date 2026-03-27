@@ -46,12 +46,6 @@ def _get_chroma() -> Chroma:
 
 def _search_chroma(query: str, k: int = RETRIEVAL_TOP_K) -> List[Document]:
     vectorstore = _get_chroma()
-    if hasattr(vectorstore, "similarity_search_with_relevance_scores"):
-        pairs = vectorstore.similarity_search_with_relevance_scores(query, k=k)
-        return [doc for doc, score in pairs if score >= RETRIEVAL_MIN_RELEVANCE]
-    if hasattr(vectorstore, "similarity_search_with_score"):
-        pairs = vectorstore.similarity_search_with_score(query, k=k)
-        return [doc for doc, score in pairs if score <= RETRIEVAL_MAX_DISTANCE]
     return vectorstore.similarity_search(query, k=k)
 
 
@@ -148,7 +142,13 @@ def rewrite_node(state: GraphState) -> Dict[str, Any]:
             )),
             HumanMessage(content=user_input),
         ])
-        rewritten = str(response.content).strip()
+        content = response.content
+        if isinstance(content, list):
+            rewritten = " ".join(
+                p.get("text", "") for p in content if isinstance(p, dict)
+            ).strip() or user_input
+        else:
+            rewritten = str(content).strip()
         if rewritten and rewritten != user_input:
             new_input = rewritten
         else:
@@ -199,7 +199,14 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
             + [HumanMessage(content=user_input)]
         )
         response = get_llm().invoke(messages)
-        is_valid, safe_content = validate_output(str(response.content))
+        raw_content = response.content
+        if isinstance(raw_content, list):
+            text_for_validate = " ".join(
+                p.get("text", "") for p in raw_content if isinstance(p, dict)
+            ).strip()
+        else:
+            text_for_validate = str(raw_content)
+        is_valid, safe_content = validate_output(text_for_validate)
         final_message = response if is_valid else AIMessage(content=safe_content)
 
     trace_buffer.push(trace_id, node="answer", event="exit", label="execute",

@@ -151,10 +151,9 @@ def rfp_draft_node(state: GraphState) -> Dict[str, Any]:
                       data={"draft_len": len(draft_text)})
 
     return {
-        **state,
         "draft_rfp": draft_text,
         "draft_email": None,
-        "rfp_review_notes": "",   # 반영 후 초기화
+        "rfp_review_notes": "",
         "current_task": "rfp_draft",
     }
 
