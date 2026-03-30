@@ -34,6 +34,7 @@ from app.graph.nodes.human_review import human_review_node, route_after_review
 from app.graph.nodes.knowledge_search import (
     search_node, quality_check_node, route_after_quality, rewrite_node, answer_node,
 )
+from app.graph.nodes.detail_search import detail_search_node
 from app.graph.nodes.ai_guide import ai_guide_node
 from app.graph.nodes.file_chat import file_chat_node
 from app.graph.nodes.file_extractor import file_extractor_node
@@ -79,6 +80,7 @@ workflow.add_node("human_review",  human_review_node)
 workflow.add_node("rfp_research",  rfp_research_node)
 workflow.add_node("rfp_draft",     rfp_draft_node)
 workflow.add_node("rfp_review",    rfp_review_node)
+workflow.add_node("detail_search", detail_search_node)
 
 workflow.set_entry_point("input_guard")
 
@@ -94,6 +96,7 @@ workflow.add_conditional_edges(
     route_by_task,
     {
         "knowledge_search": "search",
+        "detail_search":    "detail_search",
         "ai_guide":         "ai_guide",
         "file_chat":        "file_chat",
         "file_extract":     "file_extract",
@@ -143,6 +146,7 @@ workflow.add_conditional_edges(
 )
 
 # ── 종료 엣지 ────────────────────────────────────────────────
+workflow.add_edge("detail_search", "answer")
 workflow.add_edge("answer",      END)
 workflow.add_edge("ai_guide",    END)
 workflow.add_edge("file_chat",   END)

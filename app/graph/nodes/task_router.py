@@ -13,7 +13,9 @@ from app.graph.states.state import GraphState
 from app.graph.nodes.llm_intent_fallback import llm_intent_fallback
 from app.auth.intent_samples import load_all_samples, add_sample
 
-_ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "file_extract", "email_draft", "rfp_draft"}
+_ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "file_extract", "email_draft", "rfp_draft", "detail_search"}
+
+_DETAIL_HINTS = ["자세히", "자세하게", "더 알려줘", "좀 더", "구체적", "상세히", "상세하게", "더 설명", "추가로 설명", "자세한 내용", "더 자세한"]
 
 _EMAIL_STRUCT_RE = re.compile(r"(수신자\s*:|제목\s*:|내용\s*:|to\s*:|subject\s*:|body\s*:)", re.I)
 _FILE_EXT_RE = re.compile(r"\.(pdf|docx|pptx|xlsx|txt|md)\b", re.I)
@@ -191,6 +193,19 @@ def task_router_node(state: GraphState) -> GraphState:
         else:
             debug["final_source"] = "semantic"
 
+        # 상세 검색 감지: 후속 심화 패턴 + 직전 task가 knowledge_search + 메시지 존재
+        if routed in ("unknown", "knowledge_search"):
+            prev_task = (state.get("task_type") or "").strip()
+            prev_messages = state.get("messages") or []
+            if (
+                prev_task == "knowledge_search"
+                and prev_messages
+                and _contains_any(user_input, _DETAIL_HINTS)
+            ):
+                routed = "detail_search"
+                debug["decision"] = "detail_search"
+                debug["final_source"] = "detail_search_detected"
+
         # file_context 있는데 unknown이면 file_chat으로 fallback
         file_context_present = bool((state.get("file_context") or "").strip())
         if routed == "unknown" and file_context_present:
@@ -248,6 +263,8 @@ def route_by_task(state: GraphState) -> str:
         return "clarification"
     if task == "injection":
         return "rejection"
+    if task == "detail_search":
+        return "detail_search"
     if task in _ALLOWED:
         return task
     return "knowledge_search"
