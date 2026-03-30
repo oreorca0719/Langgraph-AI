@@ -164,6 +164,13 @@ def search_node(state: GraphState) -> Dict[str, Any]:
                               (getattr(d, "metadata", {}) or {}).get("display_source", "unknown")
                               for d in docs
                           ],
+                          "chunks_preview": [
+                              {
+                                  "source": (getattr(d, "metadata", {}) or {}).get("display_source", "unknown"),
+                                  "preview": (d.page_content or "")[:200],
+                              }
+                              for d in docs
+                          ],
                       })
 
     return {"task_args": {**(state.get("task_args") or {}), "search_docs": docs, "search_query": user_input}}
