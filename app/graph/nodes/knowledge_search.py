@@ -191,9 +191,10 @@ def quality_check_node(state: GraphState) -> Dict[str, Any]:
     docs: List[Document] = task_args.get("search_docs") or []
     retry_count = state.get("retry_count") or 0
 
-    ok = bool(docs) and retry_count >= _MAX_RETRY
-    if not ok and docs:
-        ok = True  # docs 존재하면 통과
+    if retry_count >= _MAX_RETRY:
+        ok = True   # 한계 도달 → 무한루프 방지, 강제 통과
+    else:
+        ok = bool(docs)  # docs 없으면 rewrite, 있으면 통과
 
     trace_buffer.push(trace_id, node="quality_check", event="exit", label="execute",
                       data={"docs": len(docs), "retry_count": retry_count, "ok": ok})
