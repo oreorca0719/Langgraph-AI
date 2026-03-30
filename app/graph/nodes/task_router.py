@@ -193,12 +193,12 @@ def task_router_node(state: GraphState) -> GraphState:
         else:
             debug["final_source"] = "semantic"
 
-        # 상세 검색 감지: 후속 심화 패턴 + 직전 task가 knowledge_search + 메시지 존재
+        # 상세 검색 감지: 후속 심화 패턴 + 직전 task가 knowledge_search/detail_search + 메시지 존재
         if routed in ("unknown", "knowledge_search"):
             prev_task = (state.get("task_type") or "").strip()
             prev_messages = state.get("messages") or []
             if (
-                prev_task == "knowledge_search"
+                prev_task in ("knowledge_search", "detail_search")
                 and prev_messages
                 and _contains_any(user_input, _DETAIL_HINTS)
             ):

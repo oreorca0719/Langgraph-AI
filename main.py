@@ -378,10 +378,9 @@ async def chat_endpoint(request: Request):
         result = graph_app.invoke(Command(resume=user_input), config=config)
     else:
         inputs = {
-            "trace_id":  trace_id,
+            "trace_id":   trace_id,
             "input_data": user_input,
-            "task_type": "",
-            "task_args": {},
+            "task_args":  {},
         }
         result = graph_app.invoke(inputs, config=config)
 
