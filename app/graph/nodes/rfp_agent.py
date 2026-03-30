@@ -9,7 +9,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from app.core.config import get_llm
 from app.core import trace_buffer
 from app.graph.states.state import GraphState
-from app.graph.nodes.knowledge_search import _search_chroma, _format_docs
+from app.graph.nodes.knowledge_search import _search_hybrid, _format_docs
 from app.security.content_sanitizer import sanitize_docs
 
 
@@ -55,7 +55,7 @@ def rfp_research_node(state: GraphState) -> Dict[str, Any]:
                       data={"input": user_input[:200]})
 
     # 사내 문서에서 관련 자료 검색
-    docs = _search_chroma(user_input, k=5)
+    docs = _search_hybrid(user_input, k=5)
     docs = sanitize_docs(docs, source="rfp_research")
     search_result = _format_docs(docs)
 
