@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import re
 import threading
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -25,10 +26,18 @@ from app.security.output_validator import validate as validate_output
 _chroma_instance: Chroma | None = None
 _chroma_lock = threading.Lock()
 
+# ── BM25 싱글톤 ─────────────────────────────────────────────
+_bm25_index = None
+_bm25_docs: List[Document] = []
+_bm25_lock = threading.Lock()
+
 # quality_check 기준
 _QUALITY_MIN_DOCS = 1
 _QUALITY_MIN_SCORE = float(RETRIEVAL_MIN_RELEVANCE)
 _MAX_RETRY = 2
+
+# 하이브리드 검색에서 시맨틱 후보 배수 (RRF 풀 크기)
+_HYBRID_FETCH_MULTIPLIER = 4
 
 
 def _get_chroma() -> Chroma:
@@ -44,9 +53,78 @@ def _get_chroma() -> Chroma:
     return _chroma_instance
 
 
-def _search_chroma(query: str, k: int = RETRIEVAL_TOP_K) -> List[Document]:
+def _tokenize(text: str) -> List[str]:
+    """공백·특수문자 기준 토큰 분리 (한국어 포함)."""
+    return re.findall(r"[가-힣a-zA-Z0-9]+", text.lower())
+
+
+def _get_bm25():
+    """BM25 인덱스 싱글톤. ChromaDB 전체 문서로 구축."""
+    global _bm25_index, _bm25_docs
+    if _bm25_index is not None:
+        return _bm25_index, _bm25_docs
+
+    with _bm25_lock:
+        if _bm25_index is not None:
+            return _bm25_index, _bm25_docs
+
+        from rank_bm25 import BM25Okapi  # type: ignore
+
+        collection = _get_chroma()._collection
+        result = collection.get(include=["documents", "metadatas"])
+        raw_docs = result.get("documents") or []
+        raw_metas = result.get("metadatas") or []
+
+        _bm25_docs = [
+            Document(page_content=text, metadata=meta)
+            for text, meta in zip(raw_docs, raw_metas)
+            if text
+        ]
+        tokenized = [_tokenize(d.page_content) for d in _bm25_docs]
+        _bm25_index = BM25Okapi(tokenized)
+
+    return _bm25_index, _bm25_docs
+
+
+def _search_bm25(query: str, k: int) -> List[Document]:
+    bm25, docs = _get_bm25()
+    tokens = _tokenize(query)
+    scores = bm25.get_scores(tokens)
+    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
+    return [docs[i] for i in top_indices if scores[i] > 0]
+
+
+def _reciprocal_rank_fusion(
+    semantic_docs: List[Document],
+    bm25_docs: List[Document],
+    k: int,
+    rrf_k: int = 60,
+) -> List[Document]:
+    """두 랭킹 결과를 RRF로 병합. 문서 식별은 page_content 기준."""
+    scores: Dict[str, float] = {}
+    doc_map: Dict[str, Document] = {}
+
+    for rank, doc in enumerate(semantic_docs):
+        key = doc.page_content
+        scores[key] = scores.get(key, 0.0) + 1.0 / (rrf_k + rank + 1)
+        doc_map[key] = doc
+
+    for rank, doc in enumerate(bm25_docs):
+        key = doc.page_content
+        scores[key] = scores.get(key, 0.0) + 1.0 / (rrf_k + rank + 1)
+        doc_map[key] = doc
+
+    sorted_keys = sorted(scores, key=lambda x: scores[x], reverse=True)
+    return [doc_map[key] for key in sorted_keys[:k]]
+
+
+def _search_hybrid(query: str, k: int = RETRIEVAL_TOP_K) -> List[Document]:
+    """시맨틱 + BM25 하이브리드 검색 (RRF 병합)."""
+    fetch_k = k * _HYBRID_FETCH_MULTIPLIER
     vectorstore = _get_chroma()
-    return vectorstore.similarity_search(query, k=k)
+    semantic_docs = vectorstore.similarity_search(query, k=fetch_k)
+    bm25_docs = _search_bm25(query, k=fetch_k)
+    return _reciprocal_rank_fusion(semantic_docs, bm25_docs, k=k)
 
 
 def _format_docs(docs: List[Document]) -> str:
@@ -76,7 +154,7 @@ def search_node(state: GraphState) -> Dict[str, Any]:
     trace_buffer.push(trace_id, node="search", event="enter", label="execute",
                       data={"input": user_input[:200], "retry_count": retry_count})
 
-    docs = _search_chroma(user_input, k=RETRIEVAL_TOP_K)
+    docs = _search_hybrid(user_input, k=RETRIEVAL_TOP_K)
     docs = sanitize_docs(docs, source="rag")
 
     trace_buffer.push(trace_id, node="search", event="exit", label="execute",

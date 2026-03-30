@@ -20,3 +20,4 @@ python-multipart
 itsdangerous
 langgraph-checkpoint
 slowapi
+rank-bm25
