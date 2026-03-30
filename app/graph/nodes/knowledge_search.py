@@ -80,7 +80,13 @@ def search_node(state: GraphState) -> Dict[str, Any]:
     docs = sanitize_docs(docs, source="rag")
 
     trace_buffer.push(trace_id, node="search", event="exit", label="execute",
-                      data={"docs_found": len(docs)})
+                      data={
+                          "docs_found": len(docs),
+                          "sources": [
+                              (getattr(d, "metadata", {}) or {}).get("display_source", "unknown")
+                              for d in docs
+                          ],
+                      })
 
     return {"task_args": {**(state.get("task_args") or {}), "search_docs": docs, "search_query": user_input}}
 
