@@ -1,14 +1,43 @@
 from __future__ import annotations
 
+import json
 import math
 import os
-from typing import List
+from typing import Any, List
 
 from langchain_core.messages import HumanMessage
 
 HISTORY_MAX_MESSAGES        = int(os.getenv("HISTORY_MAX_MESSAGES", "40"))
 HISTORY_RELEVANCE_THRESHOLD = float(os.getenv("HISTORY_RELEVANCE_THRESHOLD", "0.40"))
 HISTORY_ALWAYS_KEEP_LAST_N  = int(os.getenv("HISTORY_ALWAYS_KEEP_LAST_N", "0"))
+
+
+def extract_text_content(content: Any) -> str:
+    """LLM 응답 content (str | list | dict | None)에서 텍스트를 추출합니다.
+
+    Gemini는 str, Claude API는 list[{'type':'text','text':...}] 형태로 반환하므로
+    모든 노드에서 이 함수를 통해 텍스트를 추출해야 합니다.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                t = item.get("text")
+                if isinstance(t, str) and t.strip():
+                    parts.append(t.strip())
+            elif isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+        return "\n".join(parts).strip()
+    if isinstance(content, dict):
+        t = content.get("text")
+        if isinstance(t, str):
+            return t.strip()
+        return json.dumps(content, ensure_ascii=False)
+    return str(content).strip()
 
 
 def cosine(a: List[float], b: List[float]) -> float:

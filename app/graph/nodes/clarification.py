@@ -7,6 +7,7 @@ from langgraph.types import interrupt
 
 from app.core.config import get_llm
 from app.core import trace_buffer
+from app.core.history_utils import extract_text_content
 from app.graph.states.state import GraphState
 
 
@@ -50,13 +51,7 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
         SystemMessage(content=system_content),
         HumanMessage(content=user_input),
     ])
-    raw_content = response.content
-    if isinstance(raw_content, list):
-        response_text = " ".join(
-            p.get("text", "") for p in raw_content if isinstance(p, dict)
-        ).strip()
-    else:
-        response_text = str(raw_content).strip()
+    response_text = extract_text_content(response.content)
     is_rejection = "지원 범위에 포함되지 않아" in response_text
 
     trace_buffer.push(trace_id, node="clarification", event="call", label="execute",

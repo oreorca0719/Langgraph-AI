@@ -9,33 +9,11 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from app.core.config import get_llm
 from app.core import trace_buffer
+from app.core.history_utils import extract_text_content as _content_to_text
 from app.graph.states.state import GraphState
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _EDIT_HINTS = ["수정", "변경", "바꿔", "고쳐", "초안에서", "이 초안", "그 초안", "주소만", "to만"]
-
-
-def _content_to_text(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                t = item.get("text")
-                if isinstance(t, str) and t.strip():
-                    parts.append(t)
-            elif isinstance(item, str) and item.strip():
-                parts.append(item)
-        return "\n".join(parts).strip()
-    if isinstance(content, dict):
-        t = content.get("text")
-        if isinstance(t, str):
-            return t.strip()
-        return json.dumps(content, ensure_ascii=False)
-    if isinstance(content, str):
-        return content.strip()
-    return str(content).strip()
 
 
 def _try_parse_json_object(text: str) -> Dict[str, Any] | None:

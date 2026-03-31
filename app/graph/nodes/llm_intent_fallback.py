@@ -13,6 +13,7 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from app.core.config import get_llm, LLM_FALLBACK_ENABLED, LLM_FALLBACK_TIMEOUT_SEC
+from app.core.history_utils import extract_text_content
 
 _ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "email_draft", "file_extract", "rfp_draft"}
 _CONFIDENCE_MIN = 0.7  # 이 값 미만이면 unknown으로 처리
@@ -51,13 +52,7 @@ def llm_intent_fallback(user_input: str) -> Tuple[str, Dict[str, Any]]:
 
     def _call() -> Dict[str, Any]:
         response = (_PROMPT | get_llm()).invoke({"user_input": user_input})
-        content = response.content
-        if isinstance(content, list):
-            content = " ".join(
-                p.get("text", "") for p in content if isinstance(p, dict)
-            ).strip()
-        else:
-            content = str(content).strip()
+        content = extract_text_content(response.content)
         return JsonOutputParser().parse(content) or {}
 
     try:

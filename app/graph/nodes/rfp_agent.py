@@ -10,32 +10,10 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from app.core.config import get_llm
 from app.core import trace_buffer
+from app.core.history_utils import extract_text_content as _content_to_text
 from app.graph.states.state import GraphState
 from app.graph.nodes.knowledge_search import _search_hybrid, _format_docs
 from app.security.content_sanitizer import sanitize_docs
-
-
-def _content_to_text(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                t = item.get("text")
-                if isinstance(t, str) and t.strip():
-                    parts.append(t.strip())
-            elif isinstance(item, str) and item.strip():
-                parts.append(item.strip())
-        return "\n".join(parts).strip()
-    if isinstance(content, dict):
-        t = content.get("text")
-        if isinstance(t, str):
-            return t.strip()
-        return json.dumps(content, ensure_ascii=False)
-    return str(content).strip()
 
 
 _AMBIGUOUS_REFS = re.compile(

@@ -6,7 +6,11 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.core.config import get_llm
 from app.core import trace_buffer
-from app.core.history_utils import HISTORY_MAX_MESSAGES, filter_history_by_relevance as _filter_history_by_relevance
+from app.core.history_utils import (
+    HISTORY_MAX_MESSAGES,
+    extract_text_content,
+    filter_history_by_relevance as _filter_history_by_relevance,
+)
 from app.graph.states.state import GraphState
 
 
@@ -51,7 +55,7 @@ def ai_guide_node(state: GraphState) -> Dict[str, Any]:
     )
     response = get_llm().invoke(messages)
 
-    response_len = len(str(response.content))
+    response_len = len(extract_text_content(response.content))
     trace_buffer.push(trace_id, node="ai_guide", event="exit", label="execute",
                       data={"response_len": response_len})
 
