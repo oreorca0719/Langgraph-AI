@@ -86,20 +86,22 @@ def human_review_node(state: GraphState) -> Dict[str, Any]:
             "messages": [HumanMessage(content=user_response_str)],
         }
 
-    # 2) switch 판단: semantic routing으로 현재 task와 다른 task 감지
-    try:
-        routed, _, _ = _semantic_route(user_response_str)
-        if routed not in ("unknown", current_task) and routed != "":
-            trace_buffer.push(trace_id, node="human_review", event="exit", label="execute",
-                              data={"action": "switch", "new_task": routed})
-            return {
-                "review_action": "switch",
-                "input_data": user_response_str,
-                "task_type": "",   # task_router가 재분류
-                "messages": [HumanMessage(content=user_response_str)],
-            }
-    except Exception:
-        pass
+    # 2) switch 판단: 수정 키워드가 없을 때만 semantic routing으로 task 전환 감지
+    # 수정 힌트가 있는 경우 현재 초안 수정 요청으로 간주 (switch 건너뜀)
+    if not _contains_any(user_response_str, _REVISE_HINTS):
+        try:
+            routed, _, _ = _semantic_route(user_response_str)
+            if routed not in ("unknown", current_task) and routed != "":
+                trace_buffer.push(trace_id, node="human_review", event="exit", label="execute",
+                                  data={"action": "switch", "new_task": routed})
+                return {
+                    "review_action": "switch",
+                    "input_data": user_response_str,
+                    "task_type": "",   # task_router가 재분류
+                    "messages": [HumanMessage(content=user_response_str)],
+                }
+        except Exception:
+            pass
 
     # 3) 수정 요청 (기본)
     trace_buffer.push(trace_id, node="human_review", event="exit", label="execute",
