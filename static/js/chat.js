@@ -230,7 +230,9 @@ async function send() {
     if (!res.ok) throw new Error(data?.detail || data?.message || JSON.stringify(data));
 
     let markdownText = '';
-    if (data.type === 'email_draft') {
+    if (data.type === 'interrupt') {
+      markdownText = (data.message || '') + (data.hint ? `\n\n*${data.hint}*` : '');
+    } else if (data.type === 'email_draft') {
       markdownText = emailDraftToMarkdown(data.draft);
     } else if (data.type === 'rfp_draft') {
       const answer = (data?.answer ?? '').toString().trim();

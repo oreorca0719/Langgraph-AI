@@ -132,9 +132,6 @@ def rfp_draft_node(state: GraphState) -> Dict[str, Any]:
         human_parts.append(f"검토 의견 (반드시 반영):\n{review_notes}")
     if existing_draft:
         human_parts.append(f"기존 초안 (수정 기준):\n{existing_draft[:10000]}")
-    if args:
-        human_parts.append(f"추가 단서:\n{json.dumps(args, ensure_ascii=False)}")
-
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_content),
         MessagesPlaceholder(variable_name="chat_history"),
