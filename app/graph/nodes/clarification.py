@@ -50,7 +50,13 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
         SystemMessage(content=system_content),
         HumanMessage(content=user_input),
     ])
-    response_text = str(response.content).strip()
+    raw_content = response.content
+    if isinstance(raw_content, list):
+        response_text = " ".join(
+            p.get("text", "") for p in raw_content if isinstance(p, dict)
+        ).strip()
+    else:
+        response_text = str(raw_content).strip()
     is_rejection = "지원 범위에 포함되지 않아" in response_text
 
     trace_buffer.push(trace_id, node="clarification", event="call", label="execute",

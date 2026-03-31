@@ -50,8 +50,15 @@ def llm_intent_fallback(user_input: str) -> Tuple[str, Dict[str, Any]]:
     timeout_sec = LLM_FALLBACK_TIMEOUT_SEC
 
     def _call() -> Dict[str, Any]:
-        chain = _PROMPT | get_llm() | JsonOutputParser()
-        return chain.invoke({"user_input": user_input}) or {}
+        response = (_PROMPT | get_llm()).invoke({"user_input": user_input})
+        content = response.content
+        if isinstance(content, list):
+            content = " ".join(
+                p.get("text", "") for p in content if isinstance(p, dict)
+            ).strip()
+        else:
+            content = str(content).strip()
+        return JsonOutputParser().parse(content) or {}
 
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
