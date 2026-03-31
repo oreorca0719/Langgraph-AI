@@ -485,6 +485,9 @@ async def chat_endpoint(request: Request):
 
     _, final_text = validate_output(final_text)
 
+    if not final_text.strip():
+        final_text = "응답을 생성하지 못했습니다. 잠시 후 다시 시도해 주세요."
+
     def _extract_cited_ids(text: str) -> set[int]:
         return {int(x) for x in re.findall(r"\[(\d{1,3})\]", text or "")}
 

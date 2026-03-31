@@ -300,8 +300,13 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
             ).strip()
         else:
             text_for_validate = str(raw_content)
-        is_valid, safe_content = validate_output(text_for_validate)
-        final_message = response if is_valid else AIMessage(content=safe_content)
+        if not text_for_validate.strip():
+            final_message = AIMessage(
+                content="관련 사내 문서를 찾을 수 없습니다. 다른 키워드로 검색해 보시거나 담당 부서에 문의해 주세요."
+            )
+        else:
+            is_valid, safe_content = validate_output(text_for_validate)
+            final_message = response if is_valid else AIMessage(content=safe_content)
 
     trace_buffer.push(trace_id, node="answer", event="exit", label="execute",
                       data={"response_len": len(str(final_message.content))})
