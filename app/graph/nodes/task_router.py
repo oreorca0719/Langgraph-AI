@@ -13,7 +13,7 @@ from app.graph.states.state import GraphState
 from app.graph.nodes.llm_intent_fallback import llm_intent_fallback
 from app.auth.intent_samples import load_all_samples, add_sample
 
-_ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "file_extract", "email_draft", "rfp_draft", "detail_search"}
+_ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "file_extract", "email_draft", "rfp_draft", "detail_search", "planner"}
 
 _DETAIL_HINTS = ["자세히", "자세하게", "더 알려줘", "좀 더", "구체적", "상세히", "상세하게", "더 설명", "추가로 설명", "자세한 내용", "더 자세한"]
 
@@ -24,6 +24,12 @@ _EMAIL_WRITE_HINTS = ["작성", "초안", "문안", "써줘", "draft", "compose"
 _EMAIL_EDIT_HINTS = ["수정", "변경", "바꿔", "고쳐", "초안에서", "이 초안", "그 초안", "방금 메일", "메일에서"]
 _FILE_EXTRACT_HINTS = ["추출", "파싱", "텍스트", "본문", "extract", "parse"]
 
+# (선행 작업 패턴, 후행 작업 패턴): 두 조건이 동시에 존재하면 복합 요청으로 판단
+_COMPOUND_SIGNALS: List[Tuple[List[str], List[str]]] = [
+    (["검색", "조회", "찾아", "알아봐", "확인해"],  ["rfp", "제안요청서", "이메일", "메일", "초안", "작성해"]),
+    (["분석", "읽어", "요약"],                      ["rfp", "이메일", "초안", "작성해"]),
+]
+
 _SAMPLE_VECTORS: Dict[str, List[List[float]]] | None = None
 _SAMPLE_LOCK = threading.Lock()
 
@@ -31,6 +37,14 @@ _SAMPLE_LOCK = threading.Lock()
 def _contains_any(text: str, keywords: List[str]) -> bool:
     t = (text or "").lower()
     return any(k.lower() in t for k in keywords)
+
+
+def _is_compound_request(text: str) -> bool:
+    """선행 검색 + 후행 작성 패턴이 동시에 존재하면 복합 요청으로 판단."""
+    for lead, follow in _COMPOUND_SIGNALS:
+        if _contains_any(text, lead) and _contains_any(text, follow):
+            return True
+    return False
 
 
 def _has_email_struct(text: str) -> bool:
@@ -193,6 +207,12 @@ def task_router_node(state: GraphState) -> GraphState:
         else:
             debug["final_source"] = "semantic"
 
+        # 복합 요청 감지: 검색 + 작성 패턴이 동시 존재 (injection/file 계열 제외)
+        if routed not in ("injection", "file_chat", "file_extract") and _is_compound_request(user_input):
+            routed = "planner"
+            debug["decision"] = "planner"
+            debug["final_source"] = "compound_request_detected"
+
         # 상세 검색 감지: 후속 심화 패턴 + 직전 task가 knowledge_search/detail_search + 메시지 존재
         if routed in ("unknown", "knowledge_search"):
             prev_task = (state.get("task_type") or "").strip()
@@ -265,6 +285,8 @@ def route_by_task(state: GraphState) -> str:
         return "rejection"
     if task == "detail_search":
         return "detail_search"
+    if task == "planner":
+        return "planner"
     if task in _ALLOWED:
         return task
     return "knowledge_search"

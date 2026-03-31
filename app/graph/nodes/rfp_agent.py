@@ -91,6 +91,7 @@ def rfp_research_node(state: GraphState) -> Dict[str, Any]:
     extracted = (state.get("extracted_text") or "").strip()
     messages = list(state.get("messages") or [])
 
+    planner_context = (state.get("planner_context") or "").strip()
     search_query = _resolve_search_query(user_input, messages)
 
     trace_buffer.push(trace_id, node="rfp_research", event="enter", label="execute",
@@ -114,6 +115,8 @@ def rfp_research_node(state: GraphState) -> Dict[str, Any]:
     )
 
     human_content = f"사용자 요청:\n{user_input}"
+    if planner_context:
+        human_content += f"\n\n[Planner 사전 검색 결과]\n{planner_context}"
     if search_result:
         human_content += f"\n\n사내 문서 검색 결과:\n{search_result}"
     if extracted:

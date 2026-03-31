@@ -42,6 +42,7 @@ from app.graph.nodes.email_agent import email_draft_node
 from app.graph.nodes.rfp_agent import (
     rfp_research_node, rfp_draft_node, rfp_review_node, route_after_rfp_review,
 )
+from app.graph.nodes.planner import planner_node, route_after_planner
 from app.security.content_sanitizer import sanitize as sanitize_content
 from app.security.output_validator import validate as validate_output
 from app.knowledge.ingest import auto_ingest_if_enabled
@@ -81,6 +82,7 @@ workflow.add_node("rfp_research",  rfp_research_node)
 workflow.add_node("rfp_draft",     rfp_draft_node)
 workflow.add_node("rfp_review",    rfp_review_node)
 workflow.add_node("detail_search", detail_search_node)
+workflow.add_node("planner",       planner_node)
 
 workflow.set_entry_point("input_guard")
 
@@ -102,8 +104,22 @@ workflow.add_conditional_edges(
         "file_extract":     "file_extract",
         "email_draft":      "email_draft",
         "rfp_draft":        "rfp_research",
+        "planner":          "planner",
         "rejection":        "rejection",
         "clarification":    "clarification",
+    },
+)
+
+workflow.add_conditional_edges(
+    "planner",
+    route_after_planner,
+    {
+        "knowledge_search": "search",
+        "rfp_draft":        "rfp_research",
+        "email_draft":      "email_draft",
+        "ai_guide":         "ai_guide",
+        "detail_search":    "detail_search",
+        "file_chat":        "file_chat",
     },
 )
 
@@ -397,11 +413,19 @@ async def chat_endpoint(request: Request):
     if pending:
         iv = pending[0]
         interrupt_data = iv.value if hasattr(iv, "value") else iv
+        if not isinstance(interrupt_data, dict):
+            interrupt_data = {}
+        # 구조 데이터(draft)를 함께 포함해 JS가 직접 렌더링 가능하도록 함
+        current_task = (result.get("current_task") or result.get("task_type") or "").strip()
         return JSONResponse({
             "type":           "interrupt",
             "interrupt_type": interrupt_data.get("type", ""),
             "message":        interrupt_data.get("message", ""),
             "hint":           interrupt_data.get("hint", ""),
+            "current_task":   current_task,
+            "draft_email":    result.get("draft_email"),
+            "draft_rfp":      result.get("draft_rfp") or "",
+            "sources":        [],
         })
 
     # ── 라우팅 로그 저장 ──────────────────────────────────────

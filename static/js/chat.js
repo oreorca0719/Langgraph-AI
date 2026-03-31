@@ -231,7 +231,15 @@ async function send() {
 
     let markdownText = '';
     if (data.type === 'interrupt') {
-      markdownText = (data.message || '') + (data.hint ? `\n\n*${data.hint}*` : '');
+      // 구조 데이터가 있으면 우선 사용, 없으면 raw message fallback
+      if (data.current_task === 'email_draft' && data.draft_email) {
+        markdownText = emailDraftToMarkdown(data.draft_email);
+      } else if ((data.current_task === 'rfp_draft' || data.draft_rfp) && data.draft_rfp) {
+        markdownText = rfpDraftToMarkdown(data.draft_rfp);
+      } else {
+        markdownText = data.message || '';
+      }
+      if (data.hint) markdownText += `\n\n*${data.hint}*`;
     } else if (data.type === 'email_draft') {
       markdownText = emailDraftToMarkdown(data.draft);
     } else if (data.type === 'rfp_draft') {

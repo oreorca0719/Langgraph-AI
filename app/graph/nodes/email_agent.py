@@ -152,6 +152,7 @@ def email_draft_node(state: GraphState) -> GraphState:
     chat_history = state.get("messages", [])
     args = state.get("task_args") or {}
     prev_draft = state.get("draft_email") or {}
+    planner_context = (state.get("planner_context") or "").strip()
 
     trace_buffer.push(trace_id, node="email_draft", event="enter", label="execute",
                       data={"input": user_input[:200], "has_prev_draft": bool(prev_draft)})
@@ -188,16 +189,22 @@ def email_draft_node(state: GraphState) -> GraphState:
             "요청:\n{user_input}\n\n"
             "기존 초안:\n{prev_draft_json}\n\n"
             "추가 단서(task_args):\n{args_json}\n\n"
-            "결정된 수신자(있으면 우선 반영): {prefilled_to}",
+            "결정된 수신자(있으면 우선 반영): {prefilled_to}\n\n"
+            "{planner_context_section}",
         ),
     ])
 
+    planner_section = (
+        f"[사전 검색 결과 - 이메일 작성에 활용하세요]\n{planner_context}"
+        if planner_context else ""
+    )
     resp = (prompt | llm).invoke({
         "chat_history": chat_history,
         "user_input": user_input,
         "prev_draft_json": json.dumps(prev_draft_norm, ensure_ascii=False),
         "args_json": json.dumps(args, ensure_ascii=False),
         "prefilled_to": prefilled_to,
+        "planner_context_section": planner_section,
     })
 
     raw_text = _content_to_text(resp.content if hasattr(resp, "content") else resp)

@@ -34,5 +34,9 @@ class GraphState(TypedDict, total=False):
     current_task: str           # human_review switch 감지 기준
     interrupt_type: str         # "clarification" | "human_review"
 
+    # ── Planner ──────────────────────────────────────────
+    task_sequence: List[str]     # planner가 결정한 실행 순서
+    planner_context: str         # 선행 task 실행 결과 컨텍스트
+
     # ── 트레이스 ─────────────────────────────────────────────
     trace_id: str
