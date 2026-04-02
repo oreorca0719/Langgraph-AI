@@ -73,6 +73,11 @@ def _has_file_path_hint(text: str) -> bool:
     return False
 
 
+def _has_file_slot_reference(value: Any) -> bool:
+    text = (value or "").strip() if isinstance(value, str) else ""
+    return _has_file_path_hint(text)
+
+
 def _has_recipient_hint(text: str) -> bool:
     """이메일 수신자 힌트: 이메일 주소 or 부서명 포함 여부."""
     if _EMAIL_RE.search(text or ""):
@@ -264,26 +269,54 @@ def task_router_node(state: GraphState) -> GraphState:
 
         # file_context 있는데 unknown이면 file_chat으로 fallback
         file_context_present = bool((state.get("file_context") or "").strip())
+        file_path_present = _has_file_slot_reference(task_args.get("file_path"))
+        pending_slots = [slot for slot in (task_args.get("missing_slots") or []) if slot in ("file_path", "file_context")]
+
         if routed == "unknown" and file_context_present:
             routed = "file_chat"
             debug["decision"] = "file_chat"
             debug["final_source"] = "file_context_fallback"
 
-        # ── Priority 3: 슬롯 부족 감지 ───────────────────────────────
+        if routed == "unknown" and pending_slots:
+            if file_context_present:
+                routed = "file_chat"
+                debug["decision"] = "file_chat"
+                debug["final_source"] = "pending_file_slot_resolved"
+            elif file_path_present or _has_file_path_hint(user_input):
+                routed = "file_extract"
+                debug["decision"] = "file_extract"
+                debug["final_source"] = "pending_file_slot_resolved"
+            else:
+                routed = "clarification"
+                debug["decision"] = "clarification"
+                debug["final_source"] = "pending_file_slot"
+                debug["missing_slots"] = pending_slots
+
+        if routed == "unknown" and file_path_present:
+            routed = "file_extract"
+            debug["decision"] = "file_extract"
+            debug["final_source"] = "file_path_resume"
+
+        if routed == "file_chat" and not file_context_present and file_path_present:
+            routed = "file_extract"
+            debug["decision"] = "file_extract"
+            debug["final_source"] = "file_path_resume"
+
+        # ?? Priority 3: ?? ?? ?? ???????????????????????????????
         missing_slots: list[str] = []
 
-        # file_path: user_input에서 감지되거나, task_args에 이미 존재하면 통과
-        if routed == "file_extract" and not _has_file_path_hint(user_input) and not task_args.get("file_path"):
+        # file_path: user_input?? ?????, task_args? ?? ???? ??
+        if routed == "file_extract" and not _has_file_path_hint(user_input) and not file_path_present:
             missing_slots = ["file_path"]
-        # file_context: state에서 직접 확인 (task_args 저장 불가)
-        elif routed == "file_chat" and not file_context_present:
+        # file_context: state?? ?? ????, file_path? ??? file_extract? ?? ??
+        elif routed == "file_chat" and not file_context_present and not file_path_present:
             missing_slots = ["file_context"]
-        # to: user_input에서 감지되거나, task_args에 이미 존재하면 통과
+        # to: user_input?? ?????, task_args? ?? ???? ??
         elif routed == "email_draft" and not _has_recipient_hint(user_input) and not task_args.get("to"):
-            # email_edit 패턴은 수신자 없어도 기존 draft 수정이므로 제외
+            # email_edit ??? ??? ??? ?? draft ????? ??
             if not _contains_any(user_input, _EMAIL_EDIT_HINTS):
                 missing_slots = ["to"]
-        # project_scope: user_input에서 감지되거나, task_args에 이미 존재하면 통과
+        # project_scope: user_input?? ?????, task_args? ?? ???? ??
         elif routed == "rfp_draft" and not _has_rfp_scope_hint(user_input) and not task_args.get("project_scope"):
             missing_slots = ["project_scope"]
 

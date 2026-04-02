@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from typing import Any, Dict
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -9,6 +11,20 @@ from app.core.config import get_llm
 from app.core import trace_buffer
 from app.core.history_utils import extract_text_content
 from app.graph.states.state import GraphState
+
+
+_FILE_REFERENCE_RE = re.compile(r"(?:^|[\/\s])[^\/\s]+\.(pdf|docx|pptx|xlsx|xlsm|txt|md|csv|log)\b", re.I)
+
+
+def _looks_like_file_reference(value: str) -> bool:
+    text = (value or "").strip()
+    if not text:
+        return False
+    if _FILE_REFERENCE_RE.search(text):
+        return True
+    if any(token in text for token in ("./", ".\\", "/", "\\")):
+        return True
+    return False
 
 
 # ── Priority 3: 슬롯별 고정 질문 ───────────────────────────────
@@ -73,21 +89,35 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
             "message": question_text,
         })
 
+        normalized_response = user_response.strip()
+
+        if slot in {"file_path", "file_context"} and not _looks_like_file_reference(normalized_response):
+            retry_args = {**task_args, "missing_slots": [slot]}
+            trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
+                              data={"result": "slot_retry_invalid", "slot": slot,
+                                    "slot_value_len": len(normalized_response)})
+            return {
+                "input_data": user_input,
+                "task_type": "",
+                "task_args": retry_args,
+                "messages": [HumanMessage(content=user_input), AIMessage(content=question_text)],
+                "interrupt_type": "",
+                "clarification_count": clarification_count + 1,
+            }
+
         combined = f"{user_input} {user_response}".strip()
         new_task_args = {k: v for k, v in task_args.items() if k != "missing_slots"}
 
-        # 슬롯 값을 task_args에 구조화해서 다음 라우팅 시 직접 사용 가능하도록
         if slot == "to":
-            new_task_args["to"] = user_response.strip()
-        elif slot == "file_path":
-            new_task_args["file_path"] = user_response.strip()
+            new_task_args["to"] = normalized_response
+        elif slot in {"file_path", "file_context"}:
+            new_task_args["file_path"] = normalized_response
         elif slot == "project_scope":
-            new_task_args["project_scope"] = user_response.strip()
-        # file_context는 slotted value가 아니라 state에서 읽으므로 구조화 불필요
+            new_task_args["project_scope"] = normalized_response
 
         trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
                           data={"result": "slot_resumed", "slot": slot,
-                                "combined_len": len(combined), "slot_value_len": len(user_response.strip())})
+                                "combined_len": len(combined), "slot_value_len": len(normalized_response)})
         return {
             "input_data":          combined,
             "task_type":           "",
