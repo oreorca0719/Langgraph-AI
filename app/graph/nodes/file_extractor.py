@@ -135,7 +135,7 @@ def file_extractor_node(state: GraphState) -> GraphState:
         meta["ok"] = True
         trace_buffer.push(trace_id, node="file_extractor", event="exit", label="execute",
                           data={"ok": True, "suffix": meta.get("suffix", ""), "size_bytes": meta.get("size_bytes", 0)})
-        return {**state, "extracted_text": text, "extracted_meta": meta}
+        return {**state, "extracted_text": text, "extracted_meta": meta, "clarification_count": 0}
     except Exception as e:
         trace_buffer.push(trace_id, node="file_extractor", event="exit", label="execute",
                           data={"ok": False, "error": str(e)})

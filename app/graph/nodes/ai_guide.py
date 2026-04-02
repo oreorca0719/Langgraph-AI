@@ -59,4 +59,5 @@ def ai_guide_node(state: GraphState) -> Dict[str, Any]:
         **state,
         "messages": [HumanMessage(content=user_input), response],
         "citations_used": [],
+        "clarification_count": 0,  # 정상 경로 진입 시 루프 카운터 리셋
     }

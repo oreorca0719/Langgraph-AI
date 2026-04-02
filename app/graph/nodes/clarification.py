@@ -10,25 +10,94 @@ from app.core import trace_buffer
 from app.graph.states.state import GraphState
 
 
+# ── Priority 3: 슬롯별 고정 질문 ───────────────────────────────
+_SLOT_QUESTIONS: dict[str, str] = {
+    "file_path":     "분석할 파일 경로 또는 파일명을 알려주세요.",
+    "file_context":  "첨부 파일이 필요합니다. 먼저 파일을 업로드해 주세요.",
+    "to":            "이메일 수신자 또는 받는 부서를 알려주세요. (예: hr@example.com 또는 인사팀)",
+    "project_scope": "RFP 대상 프로젝트명이나 제안 범위를 알려주세요.",
+}
+
+
 def clarification_node(state: GraphState) -> Dict[str, Any]:
     """
     라우팅 신뢰도가 낮을 때 사용자 의도를 확인하는 노드.
 
     흐름:
-    1. LLM이 사내 기능 연관 여부 판단
+    1. clarification_count >= 2 → 무한 루프 방어, knowledge_search 강제 fallback
+    2. LLM이 사내 기능 연관 여부 판단
        - 범위 외 → rejection_node로 직행
        - 연관 가능 → 의도 확인 질문 생성
-    2. interrupt()로 질문을 사용자에게 전달하고 응답 대기
-    3. 재개 후 original + 응답을 결합 → task_router_node 루프백
+    3. interrupt()로 질문을 사용자에게 전달하고 응답 대기
+    4. 재개 후 original + 응답을 결합 → task_router_node 루프백
     """
     print("--- [NODE] Clarification ---")
 
     trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
+    clarification_count = (state.get("clarification_count") or 0)
+    task_type = (state.get("task_type") or "").strip()
+    task_args = state.get("task_args") or {}
+    missing_slots: list[str] = task_args.get("missing_slots") or []
 
     trace_buffer.push(trace_id, node="clarification", event="enter", label="execute",
-                      data={"input": user_input[:200]})
+                      data={"input": user_input[:200], "count": clarification_count, "missing_slots": missing_slots})
 
+    # 루프 방어: 2회 이상 발동 시 강제 knowledge_search fallback
+    if clarification_count >= 2:
+        trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
+                          data={"result": "loop_fallback"})
+        old_args = state.get("task_args") or {}
+        clean_args = {k: v for k, v in old_args.items() if k != "missing_slots"}
+        clean_args["routing_debug"] = {"final_source": "clarification_loop_fallback"}
+        return {
+            "task_type": "knowledge_search",
+            "clarification_count": 0,
+            "task_args": clean_args,
+        }
+
+    # ── Priority 3: 슬롯 기반 clarification (LLM 우회) ───────────────
+    if missing_slots:
+        slot = missing_slots[0]
+        question_text = _SLOT_QUESTIONS.get(
+            slot,
+            f"'{slot}' 정보를 추가로 알려주세요."
+        )
+
+        trace_buffer.push(trace_id, node="clarification", event="call", label="execute",
+                          data={"mode": "slot_question", "slot": slot})
+
+        user_response = interrupt({
+            "type":    "clarification",
+            "message": question_text,
+        })
+
+        combined = f"{user_input} {user_response}".strip()
+        new_task_args = {k: v for k, v in task_args.items() if k != "missing_slots"}
+
+        # 슬롯 값을 task_args에 구조화해서 다음 라우팅 시 직접 사용 가능하도록
+        if slot == "to":
+            new_task_args["to"] = user_response.strip()
+        elif slot == "file_path":
+            new_task_args["file_path"] = user_response.strip()
+        elif slot == "project_scope":
+            new_task_args["project_scope"] = user_response.strip()
+        # file_context는 slotted value가 아니라 state에서 읽으므로 구조화 불필요
+
+        trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
+                          data={"result": "slot_resumed", "slot": slot,
+                                "combined_len": len(combined), "slot_value_len": len(user_response.strip())})
+        return {
+            "input_data":          combined,
+            "task_type":           "",
+            "task_args":           new_task_args,
+            "messages":            [HumanMessage(content=user_input),
+                                    AIMessage(content=question_text)],
+            "interrupt_type":      "",
+            "clarification_count": clarification_count + 1,
+        }
+
+    # ── 기존 LLM 기반 clarification (missing_slots 없음) ─────────────
     system_content = (
         "당신은 사내 AI 어시스턴트입니다. 사용자의 요청 의도가 불분명합니다.\n\n"
         "이 시스템이 제공하는 기능:\n"
@@ -78,8 +147,10 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
     return {
         "input_data": combined,
         "task_type": "",          # task_router가 재분류
+        "task_args": task_args,   # 기존 task_args 보존 (라우팅 컨텍스트 유지)
         "messages": [HumanMessage(content=user_input), AIMessage(content=response_text)],
         "interrupt_type": "",
+        "clarification_count": clarification_count + 1,
     }
 
 
@@ -88,4 +159,6 @@ def route_after_clarification(state: GraphState) -> str:
     task = (state.get("task_type") or "").strip()
     if task == "rejection":
         return "rejection"
+    if task == "knowledge_search":
+        return "knowledge_search"  # 루프 방어 fallback 경로
     return "task_router"

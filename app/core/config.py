@@ -92,6 +92,7 @@ INGEST_CHUNK_MAX_CHARS = int(os.getenv("INGEST_CHUNK_MAX_CHARS", "1200"))
 
 ROUTER_TOP1_MIN  = float(os.getenv("ROUTER_TOP1_MIN",  "0.62"))
 ROUTER_MARGIN_MIN = float(os.getenv("ROUTER_MARGIN_MIN", "0.08"))
+EMAIL_DRAFT_HIGH_CONF_THRESHOLD = float(os.getenv("EMAIL_DRAFT_HIGH_CONF_THRESHOLD", "0.70"))
 
 
 # ──────────────────────────────────────────────
@@ -100,3 +101,4 @@ ROUTER_MARGIN_MIN = float(os.getenv("ROUTER_MARGIN_MIN", "0.08"))
 
 LLM_FALLBACK_ENABLED     = os.getenv("LLM_FALLBACK_ENABLED", "1")
 LLM_FALLBACK_TIMEOUT_SEC = float(os.getenv("LLM_FALLBACK_TIMEOUT_SEC", "8"))
+LLM_FALLBACK_CONFIDENCE_MIN = float(os.getenv("LLM_FALLBACK_CONFIDENCE_MIN", "0.5"))

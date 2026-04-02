@@ -12,10 +12,11 @@ from typing import Any, Dict, Tuple
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from app.core.config import get_llm, LLM_FALLBACK_ENABLED, LLM_FALLBACK_TIMEOUT_SEC
+from app.core.config import get_llm, LLM_FALLBACK_ENABLED, LLM_FALLBACK_TIMEOUT_SEC, LLM_FALLBACK_CONFIDENCE_MIN
 
 _ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "email_draft", "file_extract", "rfp_draft"}
-_CONFIDENCE_MIN = 0.7  # 이 값 미만이면 unknown으로 처리
+_CONFIDENCE_MIN = LLM_FALLBACK_CONFIDENCE_MIN  # 이 값 미만이면 unknown으로 처리
+_CONFIDENCE_HIGH = 0.7  # 이 값 이상이면 고신뢰도
 
 _PROMPT = ChatPromptTemplate.from_template(
     "당신은 사용자 메시지의 의도를 분류하는 분류기입니다.\n"
@@ -29,7 +30,7 @@ _PROMPT = ChatPromptTemplate.from_template(
     "- rfp_draft: RFP(제안요청서) 문서 작성\n"
     "- unknown: 위 태스크와 무관하거나 의도를 파악할 수 없는 경우\n\n"
     "규칙:\n"
-    "- 확신도가 0.7 미만이면 반드시 unknown을 반환하세요.\n"
+    "- 확신도가 0.5 미만이면 반드시 unknown을 반환하세요.\n"
     "- 짧거나 대명사만 있는 입력('이거', '저거', '그거', '해줘')은 unknown으로 처리하세요.\n\n"
     "반드시 아래 형식으로만 출력:\n"
     "{{\"task\": \"<태스크>\", \"confidence\": <0.0~1.0>, \"reason\": \"<한 줄 이유>\"}}\n\n"
@@ -74,6 +75,11 @@ def llm_intent_fallback(user_input: str) -> Tuple[str, Dict[str, Any]]:
             "final_task": task,
             "reason": result.get("reason", ""),
         }
+
+        # 0.5~0.7 구간: best-effort 실행 표시
+        if _CONFIDENCE_MIN <= confidence < _CONFIDENCE_HIGH:
+            debug["low_confidence"] = True
+
         return task, debug
 
     except FuturesTimeoutError:

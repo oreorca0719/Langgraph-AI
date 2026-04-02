@@ -310,4 +310,5 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
         "messages": [HumanMessage(content=user_input), final_message],
         "citations_used": [],
         "retry_count": 0,
+        "clarification_count": 0,  # 정상 경로 진입 시 루프 카운터 리셋
     }

@@ -30,6 +30,7 @@ class GraphState(TypedDict, total=False):
 
     # ── 순환 / 상태 제어 ─────────────────────────────────────
     retry_count: int            # knowledge search 재시도 횟수
+    clarification_count: int    # clarification 발동 횟수 (루프 방어용)
     review_action: str          # "approve" | "revise" | "switch"
     current_task: str           # human_review switch 감지 기준
     interrupt_type: str         # "clarification" | "human_review"

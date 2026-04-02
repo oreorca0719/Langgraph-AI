@@ -123,11 +123,15 @@ workflow.add_conditional_edges(
     },
 )
 
-# clarification → rejection or task_router (순환)
+# clarification → rejection or task_router or knowledge_search (루프 방어 fallback)
 workflow.add_conditional_edges(
     "clarification",
     route_after_clarification,
-    {"rejection": "rejection", "task_router": "task_router"},
+    {
+        "rejection":        "rejection",
+        "task_router":      "task_router",
+        "knowledge_search": "search",  # 루프 방어 fallback 경로
+    },
 )
 
 # knowledge search 순환: search → quality_check → (answer | rewrite → search)

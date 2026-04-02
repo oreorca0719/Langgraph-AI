@@ -166,7 +166,9 @@ def email_draft_node(state: GraphState) -> GraphState:
             **state,
             "draft_email": patched,
             "draft_rfp": None,
+            "task_type": "email_draft",
             "current_task": "email_draft",
+            "clarification_count": 0,
         }
 
     llm = get_llm()
@@ -229,5 +231,7 @@ def email_draft_node(state: GraphState) -> GraphState:
         **state,
         "draft_email": draft,
         "draft_rfp": None,
+        "task_type": "email_draft",
         "current_task": "email_draft",
+        "clarification_count": 0,
     }

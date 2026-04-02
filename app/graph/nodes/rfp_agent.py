@@ -196,7 +196,9 @@ def rfp_draft_node(state: GraphState) -> Dict[str, Any]:
         "draft_rfp": draft_text,
         "draft_email": None,
         "rfp_review_notes": "",
+        "task_type": "rfp_draft",
         "current_task": "rfp_draft",
+        "clarification_count": 0,
     }
 
 

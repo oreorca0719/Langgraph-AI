@@ -101,6 +101,7 @@ def planner_node(state: GraphState) -> Dict[str, Any]:
         "task_sequence": task_sequence,
         "planner_context": planner_context,
         "task_type": final_task,
+        "clarification_count": 0,
     }
 
 

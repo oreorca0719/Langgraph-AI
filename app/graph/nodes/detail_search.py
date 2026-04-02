@@ -119,4 +119,5 @@ def detail_search_node(state: GraphState) -> Dict[str, Any]:
     return {
         "input_data": reconstructed_query,
         "task_args": {**task_args, "search_docs": docs, "search_query": reconstructed_query},
+        "clarification_count": 0,
     }

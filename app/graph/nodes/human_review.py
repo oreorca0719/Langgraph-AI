@@ -84,6 +84,10 @@ def human_review_node(state: GraphState) -> Dict[str, Any]:
             "review_action": "approve",
             "input_data": user_response_str,
             "messages": [HumanMessage(content=user_response_str)],
+            "draft_email": state.get("draft_email"),
+            "draft_rfp": state.get("draft_rfp"),
+            "task_type": state.get("task_type"),
+            "current_task": current_task,
         }
 
     # 2) switch 판단: semantic routing으로 현재 task와 다른 task 감지
@@ -97,6 +101,9 @@ def human_review_node(state: GraphState) -> Dict[str, Any]:
                 "input_data": user_response_str,
                 "task_type": "",   # task_router가 재분류
                 "messages": [HumanMessage(content=user_response_str)],
+                "draft_email": state.get("draft_email"),
+                "draft_rfp": state.get("draft_rfp"),
+                "current_task": current_task,
             }
     except Exception:
         pass
@@ -108,6 +115,10 @@ def human_review_node(state: GraphState) -> Dict[str, Any]:
         "review_action": "revise",
         "input_data": user_response_str,
         "messages": [HumanMessage(content=user_response_str)],
+        "draft_email": state.get("draft_email"),
+        "draft_rfp": state.get("draft_rfp"),
+        "task_type": state.get("task_type"),
+        "current_task": current_task,
     }
 
 

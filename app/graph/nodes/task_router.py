@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Tuple
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.config import get_embeddings, ROUTER_TOP1_MIN, ROUTER_MARGIN_MIN
+from app.core.config import EMAIL_DRAFT_HIGH_CONF_THRESHOLD
 from app.core import trace_buffer
 from app.core.history_utils import cosine as _cosine
 from app.graph.states.state import GraphState
@@ -23,6 +24,16 @@ _FILE_EXT_RE = re.compile(r"\.(pdf|docx|pptx|xlsx|txt|md)\b", re.I)
 _EMAIL_WRITE_HINTS = ["작성", "초안", "문안", "써줘", "draft", "compose", "작성해", "작성해줘"]
 _EMAIL_EDIT_HINTS = ["수정", "변경", "바꿔", "고쳐", "초안에서", "이 초안", "그 초안", "방금 메일", "메일에서"]
 _FILE_EXTRACT_HINTS = ["추출", "파싱", "텍스트", "본문", "extract", "parse"]
+
+# ── Priority 3: 슬롯 감지용 상수 ──────────────────────────────
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+_DEPT_NAMES = ["인사팀", "hr", "총무팀", "재무팀", "회계팀", "it지원팀", "it 지원팀",
+               "마케팅팀", "영업팀", "개발팀", "법무팀", "기획팀", "경영지원팀"]
+
+_RFP_SCOPE_HINTS = ["프로젝트", "시스템", "솔루션", "플랫폼", "구축", "개발", "도입",
+                    "고도화", "전환", "운영", "서비스", "인프라", "제안", "설계", "구현",
+                    "마이그레이션", "통합", "개선", "최적화", "리팩토링", "업그레이드"]
 
 # (선행 작업 패턴, 후행 작업 패턴): 두 조건이 동시에 존재하면 복합 요청으로 판단
 _COMPOUND_SIGNALS: List[Tuple[List[str], List[str]]] = [
@@ -60,6 +71,30 @@ def _has_file_path_hint(text: str) -> bool:
     if _contains_any(t, ["경로", "file_path", "filepath", "파일경로"]):
         return True
     return False
+
+
+def _has_recipient_hint(text: str) -> bool:
+    """이메일 수신자 힌트: 이메일 주소 or 부서명 포함 여부."""
+    if _EMAIL_RE.search(text or ""):
+        return True
+    if _contains_any(text, _DEPT_NAMES):
+        return True
+    return False
+
+
+def _has_rfp_scope_hint(text: str) -> bool:
+    """RFP 범위 신호: _RFP_SCOPE_HINTS 중 하나라도 있으면 통과."""
+    value = (text or "").strip()
+    lowered = value.lower()
+    if _contains_any(lowered, _RFP_SCOPE_HINTS):
+        return True
+
+    english_scope_patterns = [
+        r"\brfp\s+for\s+(?:a|an|the|new)?\s*[a-z0-9][a-z0-9\s\-]{2,}\b",
+        r"\bfor\s+(?:vendor selection|cloud migration|erp|crm|system|platform|implementation|upgrade|integration|proposal)\b",
+        r"\b(new|existing)\s+(erp|crm|system|platform|portal|service|solution)\b",
+    ]
+    return any(re.search(pattern, lowered) for pattern in english_scope_patterns)
 
 
 def invalidate_sample_cache() -> None:
@@ -149,11 +184,12 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
         decision = "unknown"
 
     if decision == "email_draft":
-        if not (
+        hint_present = (
             _has_email_struct(user_input)
             or _contains_any(user_input, _EMAIL_WRITE_HINTS)
             or _contains_any(user_input, _EMAIL_EDIT_HINTS)
-        ):
+        )
+        if not hint_present and top1_score <= EMAIL_DRAFT_HIGH_CONF_THRESHOLD:
             decision = "unknown"
 
     if decision == "file_extract":
@@ -233,7 +269,33 @@ def task_router_node(state: GraphState) -> GraphState:
             debug["decision"] = "file_chat"
             debug["final_source"] = "file_context_fallback"
 
+        # ── Priority 3: 슬롯 부족 감지 ───────────────────────────────
+        missing_slots: list[str] = []
+
+        # file_path: user_input에서 감지되거나, task_args에 이미 존재하면 통과
+        if routed == "file_extract" and not _has_file_path_hint(user_input) and not task_args.get("file_path"):
+            missing_slots = ["file_path"]
+        # file_context: state에서 직접 확인 (task_args 저장 불가)
+        elif routed == "file_chat" and not file_context_present:
+            missing_slots = ["file_context"]
+        # to: user_input에서 감지되거나, task_args에 이미 존재하면 통과
+        elif routed == "email_draft" and not _has_recipient_hint(user_input) and not task_args.get("to"):
+            # email_edit 패턴은 수신자 없어도 기존 draft 수정이므로 제외
+            if not _contains_any(user_input, _EMAIL_EDIT_HINTS):
+                missing_slots = ["to"]
+        # project_scope: user_input에서 감지되거나, task_args에 이미 존재하면 통과
+        elif routed == "rfp_draft" and not _has_rfp_scope_hint(user_input) and not task_args.get("project_scope"):
+            missing_slots = ["project_scope"]
+
+        if missing_slots:
+            routed = "clarification"
+            debug["decision"] = "clarification"
+            debug["final_source"] = "slot_missing"
+            debug["missing_slots"] = missing_slots
+
         merged_args = {**task_args, "routing_debug": debug}
+        if missing_slots:
+            merged_args["missing_slots"] = missing_slots
 
         trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
                           data={
@@ -275,14 +337,28 @@ def rejection_node(state: GraphState) -> Dict[str, Any]:
     }
 
 
+def _unknown_fallback_route(state: GraphState) -> str:
+    """Unknown task를 AI 안내 또는 지식 검색으로 우선 실행."""
+    user_input = (state.get("input_data") or "").strip()
+    _AI_GUIDE_TRIGGERS = [
+        "안녕", "반가워", "뭐 할 수 있어", "무슨 기능", "도움말", "help",
+        "소개해", "뭐야", "누구야", "어떤 ai", "기능 안내", "사용법",
+    ]
+    if len(user_input) <= 15 or _contains_any(user_input, _AI_GUIDE_TRIGGERS):
+        return "ai_guide"
+    return "knowledge_search"
+
+
 def route_by_task(state: GraphState) -> str:
     task = (state.get("task_type") or "knowledge_search").strip()
     if task == "chat":
         return "knowledge_search"
     if task in ("unknown", ""):
-        return "clarification"
+        return _unknown_fallback_route(state)
     if task == "injection":
         return "rejection"
+    if task == "clarification":
+        return "clarification"
     if task == "detail_search":
         return "detail_search"
     if task == "planner":
