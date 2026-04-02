@@ -9,33 +9,11 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from app.core.config import get_llm
 from app.core import trace_buffer
+from app.core.history_utils import extract_text_content as _content_to_text
 from app.graph.states.state import GraphState
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _EDIT_HINTS = ["수정", "변경", "바꿔", "고쳐", "초안에서", "이 초안", "그 초안", "주소만", "to만"]
-
-
-def _content_to_text(content: Any) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                t = item.get("text")
-                if isinstance(t, str) and t.strip():
-                    parts.append(t)
-            elif isinstance(item, str) and item.strip():
-                parts.append(item)
-        return "\n".join(parts).strip()
-    if isinstance(content, dict):
-        t = content.get("text")
-        if isinstance(t, str):
-            return t.strip()
-        return json.dumps(content, ensure_ascii=False)
-    if isinstance(content, str):
-        return content.strip()
-    return str(content).strip()
 
 
 def _try_parse_json_object(text: str) -> Dict[str, Any] | None:
@@ -182,7 +160,12 @@ def email_draft_node(state: GraphState) -> GraphState:
                 "당신은 업무 이메일 작성 에이전트입니다.\n"
                 "사용자 요청과 단서를 바탕으로 이메일 초안을 작성하세요.\n"
                 "반드시 JSON만 출력하고, 키는 to/cc/subject/body만 사용하세요.\n"
-                "편집 요청인 경우 기존 초안의 유지 가능한 필드는 최대한 유지하세요."
+                "편집 요청인 경우 기존 초안의 유지 가능한 필드는 최대한 유지하세요.\n\n"
+                "【작성 범위 원칙】\n"
+                "• 이메일 내용은 사용자가 명시적으로 요청한 범위에만 한정하세요.\n"
+                "• 사용자가 요청하지 않은 정보(상세 커리큘럼, 비용, 일정표 등)를 임의로 추가하지 마세요.\n"
+                "• '간단히', '확정 안내', '알려줘' 등 단순 요청은 간결하게 핵심만 담아 작성하세요.\n"
+                "• 추가 정보가 필요하면 이메일 본문에 포함하지 말고 수신자에게 별도 문의를 유도하세요."
             ),
         ),
         MessagesPlaceholder(variable_name="chat_history"),

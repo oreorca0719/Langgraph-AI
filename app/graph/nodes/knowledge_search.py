@@ -16,6 +16,7 @@ from app.core.config import (
 from app.core import trace_buffer
 from app.core.history_utils import (
     HISTORY_MAX_MESSAGES,
+    extract_text_content,
     filter_history_by_relevance as _filter_history_by_relevance,
 )
 from app.graph.states.state import GraphState
@@ -234,13 +235,7 @@ def rewrite_node(state: GraphState) -> Dict[str, Any]:
             )),
             HumanMessage(content=user_input),
         ])
-        content = response.content
-        if isinstance(content, list):
-            rewritten = " ".join(
-                p.get("text", "") for p in content if isinstance(p, dict)
-            ).strip() or user_input
-        else:
-            rewritten = str(content).strip()
+        rewritten = extract_text_content(response.content)
         if rewritten and rewritten != user_input:
             new_input = rewritten
         else:
@@ -293,15 +288,14 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
             + [HumanMessage(content=user_input)]
         )
         response = get_llm().invoke(messages)
-        raw_content = response.content
-        if isinstance(raw_content, list):
-            text_for_validate = " ".join(
-                p.get("text", "") for p in raw_content if isinstance(p, dict)
-            ).strip()
+        text_for_validate = extract_text_content(response.content)
+        if not text_for_validate.strip():
+            final_message = AIMessage(
+                content="관련 사내 문서를 찾을 수 없습니다. 다른 키워드로 검색해 보시거나 담당 부서에 문의해 주세요."
+            )
         else:
-            text_for_validate = str(raw_content)
-        is_valid, safe_content = validate_output(text_for_validate)
-        final_message = response if is_valid else AIMessage(content=safe_content)
+            is_valid, safe_content = validate_output(text_for_validate)
+            final_message = response if is_valid else AIMessage(content=safe_content)
 
     trace_buffer.push(trace_id, node="answer", event="exit", label="execute",
                       data={"response_len": len(str(final_message.content))})

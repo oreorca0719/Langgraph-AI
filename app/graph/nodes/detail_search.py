@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.core.config import get_llm, RETRIEVAL_TOP_K
 from app.core import trace_buffer
+from app.core.history_utils import extract_text_content
 from app.graph.nodes.knowledge_search import _get_chroma, _search_hybrid
 from app.graph.states.state import GraphState
 from app.security.content_sanitizer import sanitize_docs
@@ -38,7 +39,7 @@ def _reconstruct_query(prev_human: str, prev_ai: str, current_input: str) -> tup
                 f"[현재 요청]\n{current_input}"
             )),
         ])
-        content = str(response.content).strip()
+        content = extract_text_content(response.content)
         query = current_input
         source = ""
         for line in content.splitlines():
