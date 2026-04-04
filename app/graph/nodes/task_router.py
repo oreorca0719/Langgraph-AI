@@ -1,236 +1,69 @@
 from __future__ import annotations
 
-import re
-import threading
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Literal
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
 
-from app.core.config import get_embeddings, ROUTER_TOP1_MIN, ROUTER_MARGIN_MIN
-from app.core.config import EMAIL_DRAFT_HIGH_CONF_THRESHOLD
+from app.core.config import get_llm
 from app.core import trace_buffer
-from app.core.history_utils import cosine as _cosine
 from app.graph.states.state import GraphState
-from app.graph.nodes.llm_intent_fallback import llm_intent_fallback
-from app.auth.intent_samples import load_all_samples, add_sample
-
-_ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "file_extract", "email_draft", "rfp_draft", "detail_search", "planner"}
-
-_DETAIL_HINTS = ["자세히", "자세하게", "더 알려줘", "좀 더", "구체적", "상세히", "상세하게", "더 설명", "추가로 설명", "자세한 내용", "더 자세한"]
-
-_EMAIL_STRUCT_RE = re.compile(r"(수신자\s*:|제목\s*:|내용\s*:|to\s*:|subject\s*:|body\s*:)", re.I)
-_FILE_EXT_RE = re.compile(r"\.(pdf|docx|pptx|xlsx|txt|md)\b", re.I)
-
-_EMAIL_WRITE_HINTS = ["작성", "초안", "문안", "써줘", "draft", "compose", "작성해", "작성해줘"]
-_EMAIL_EDIT_HINTS = ["수정", "변경", "바꿔", "고쳐", "초안에서", "이 초안", "그 초안", "방금 메일", "메일에서"]
-_FILE_EXTRACT_HINTS = ["추출", "파싱", "텍스트", "본문", "extract", "parse"]
-
-# ── Priority 3: 슬롯 감지용 상수 ──────────────────────────────
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-
-# 이름+직함 또는 방향 조사 패턴: "신수연 담당자", "업스테이지에게", "김팀장님께" 등
-_PERSON_TITLE_RE = re.compile(
-    r"[가-힣A-Za-z0-9]+\s*(?:에게|께|님께)|"
-    r"[가-힣A-Za-z0-9]+\s*(?:담당자|팀장|부장|과장|차장|대리|이사|대표|사원|매니저)",
-    re.I,
-)
-
-_DEPT_NAMES = ["인사팀", "hr", "총무팀", "재무팀", "회계팀", "it지원팀", "it 지원팀",
-               "마케팅팀", "영업팀", "개발팀", "법무팀", "기획팀", "경영지원팀"]
-
-_RFP_SCOPE_HINTS = ["프로젝트", "시스템", "솔루션", "플랫폼", "구축", "개발", "도입",
-                    "고도화", "전환", "운영", "서비스", "인프라", "제안", "설계", "구현",
-                    "마이그레이션", "통합", "개선", "최적화", "리팩토링", "업그레이드",
-                    "프로그램", "교육", "과정", "앱", "애플리케이션", "기획", "컨설팅", "분석"]
-
-# (선행 작업 패턴, 후행 작업 패턴): 두 조건이 동시에 존재하면 복합 요청으로 판단
-_COMPOUND_SIGNALS: List[Tuple[List[str], List[str]]] = [
-    (["검색", "조회", "찾아", "알아봐", "확인해"],  ["rfp", "제안요청서", "이메일", "메일", "초안", "작성해"]),
-    (["분석", "읽어", "요약"],                      ["rfp", "이메일", "초안", "작성해"]),
-]
-
-_SAMPLE_VECTORS: Dict[str, List[List[float]]] | None = None
-_SAMPLE_LOCK = threading.Lock()
 
 
-def _contains_any(text: str, keywords: List[str]) -> bool:
-    t = (text or "").lower()
-    return any(k.lower() in t for k in keywords)
+# ── 라우팅 결과 스키마 ────────────────────────────────────────────
 
-
-def _is_compound_request(text: str) -> bool:
-    """선행 검색 + 후행 작성 패턴이 동시에 존재하면 복합 요청으로 판단."""
-    for lead, follow in _COMPOUND_SIGNALS:
-        if _contains_any(text, lead) and _contains_any(text, follow):
-            return True
-    return False
-
-
-def _has_email_struct(text: str) -> bool:
-    return bool(_EMAIL_STRUCT_RE.search(text or ""))
-
-
-def _has_file_path_hint(text: str) -> bool:
-    t = text or ""
-    if _FILE_EXT_RE.search(t):
-        return True
-    if any(x in t for x in ["./", ".\\", "/", "\\"]):
-        return True
-    if _contains_any(t, ["경로", "file_path", "filepath", "파일경로"]):
-        return True
-    return False
-
-
-def _has_file_slot_reference(value: Any) -> bool:
-    text = (value or "").strip() if isinstance(value, str) else ""
-    return _has_file_path_hint(text)
-
-
-def _has_recipient_hint(text: str) -> bool:
-    """이메일 수신자 힌트: 이메일 주소, 부서명, 또는 이름+직함/방향 조사 포함 여부."""
-    if _EMAIL_RE.search(text or ""):
-        return True
-    if _contains_any(text, _DEPT_NAMES):
-        return True
-    if _PERSON_TITLE_RE.search(text or ""):
-        return True
-    return False
-
-
-def _has_rfp_scope_hint(text: str) -> bool:
-    """RFP 범위 신호: _RFP_SCOPE_HINTS 중 하나라도 있으면 통과."""
-    value = (text or "").strip()
-    lowered = value.lower()
-    if _contains_any(lowered, _RFP_SCOPE_HINTS):
-        return True
-
-    english_scope_patterns = [
-        r"\brfp\s+for\s+(?:a|an|the|new)?\s*[a-z0-9][a-z0-9\s\-]{2,}\b",
-        r"\bfor\s+(?:vendor selection|cloud migration|erp|crm|system|platform|implementation|upgrade|integration|proposal)\b",
-        r"\b(new|existing)\s+(erp|crm|system|platform|portal|service|solution)\b",
+class RouteDecision(BaseModel):
+    task: Literal[
+        "email_draft", "rfp_draft", "knowledge_search",
+        "file_chat", "file_extract", "ai_guide",
+        "detail_search", "planner", "rejection",
     ]
-    return any(re.search(pattern, lowered) for pattern in english_scope_patterns)
+    missing_slots: List[Literal["to", "project_scope", "file_path", "file_context"]] = Field(
+        default_factory=list,
+        description="태스크 실행에 필요하지만 사용자 입력에 없는 슬롯",
+    )
 
 
-def invalidate_sample_cache() -> None:
-    global _SAMPLE_VECTORS
-    with _SAMPLE_LOCK:
-        _SAMPLE_VECTORS = None
+# ── 라우터 시스템 프롬프트 ────────────────────────────────────────
+
+_ROUTER_SYSTEM = """\
+당신은 사내 AI 어시스턴트의 라우터입니다.
+사용자 요청을 아래 태스크 중 정확히 하나로 분류하고,
+태스크 실행에 필요한 정보가 없으면 missing_slots에 포함하세요.
+
+[태스크 목록]
+- email_draft      : 이메일·메일 초안 작성 요청
+- rfp_draft        : RFP·제안요청서·요구사항 정의서 작성 요청
+- knowledge_search : 사내 문서·정보 검색·질의 응답
+- file_chat        : 업로드된 파일 내용 질문·분석 (파일이 있을 때만)
+- file_extract     : 파일 텍스트 추출 요청
+- ai_guide         : 인사·자기소개·기능 안내 요청
+- detail_search    : 직전 검색 결과에 대한 심화·추가 질의
+- planner          : 검색 후 문서 작성 등 2단계 복합 요청
+- rejection        : 사내 업무와 전혀 무관한 요청 (날씨, 게임, 개인 질문 등)
+
+[missing_slots 판단 기준]
+- "to"            : email_draft인데 수신자(사람·부서·회사)를 전혀 특정할 수 없을 때
+- "project_scope" : rfp_draft인데 대상 프로젝트·범위를 전혀 알 수 없을 때
+- "file_path"     : file_extract인데 파일 경로·파일명이 없을 때
+- "file_context"  : file_chat인데 업로드된 파일이 없다고 명시된 경우
+
+[판단 원칙]
+- 수신자가 회사명·부서명·직함으로라도 특정된다면 "to" 슬롯은 누락이 아닙니다.
+- detail_search는 직전 대화에서 knowledge_search·detail_search가 있었을 때만 선택하세요.
+- planner는 "~검색해서 ~작성해줘" 처럼 선행 조사 + 후행 작성이 명확히 결합된 경우입니다.
+- 애매하면 knowledge_search를 기본으로 선택하세요.
+"""
 
 
-def _load_sample_vectors() -> Dict[str, List[List[float]]]:
-    global _SAMPLE_VECTORS
-    if _SAMPLE_VECTORS is not None:
-        return _SAMPLE_VECTORS
-    with _SAMPLE_LOCK:
-        if _SAMPLE_VECTORS is not None:
-            return _SAMPLE_VECTORS
-        samples = load_all_samples()
-        embeddings = get_embeddings()
-        vectors: Dict[str, List[List[float]]] = {}
-        for task, texts in samples.items():
-            if task not in _ALLOWED:
-                continue
-            vectors[task] = embeddings.embed_documents(texts)
-        _SAMPLE_VECTORS = vectors
-        return _SAMPLE_VECTORS
+# ── 노드 ─────────────────────────────────────────────────────────
 
-
-def _rule_based_route(user_input: str) -> str:
-    if _contains_any(user_input, _EMAIL_EDIT_HINTS):
-        return "email_draft"
-    if _has_email_struct(user_input) or _contains_any(user_input, ["이메일", "메일", "email"]):
-        return "email_draft"
-    if _contains_any(user_input, ["rfp", "제안요청서", "요구사항", "요구사항 정의서"]):
-        return "rfp_draft"
-    has_extract_intent = _contains_any(user_input, ["추출", "텍스트 추출", "내용 추출", "파싱", "읽어줘", "extract"])
-    if has_extract_intent and _has_file_path_hint(user_input):
-        return "file_extract"
-    return "knowledge_search"
-
-
-def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
-    if _contains_any(user_input, _EMAIL_EDIT_HINTS):
-        debug = {
-            "mode": "semantic", "top1_task": "email_draft", "top1_score": 1.0,
-            "top2_score": 0.0, "margin": 1.0, "decision": "email_draft",
-            "reason": "email_edit_hint", "ranked": [{"task": "email_draft", "score": 1.0}],
-        }
-        return "email_draft", debug, []
-
-    if (
-        _has_email_struct(user_input)
-        or (
-            _contains_any(user_input, ["이메일", "메일", "email"])
-            and _contains_any(user_input, _EMAIL_WRITE_HINTS)
-        )
-    ):
-        debug = {
-            "mode": "semantic", "top1_task": "email_draft", "top1_score": 1.0,
-            "top2_score": 0.0, "margin": 1.0, "decision": "email_draft",
-            "reason": "email_write_hint", "ranked": [{"task": "email_draft", "score": 1.0}],
-        }
-        return "email_draft", debug, []
-
-    vectors = _load_sample_vectors()
-    embeddings = get_embeddings()
-    query_vec = embeddings.embed_query(user_input)
-
-    ranked: List[Tuple[str, float]] = []
-    for task, task_vectors in vectors.items():
-        if not task_vectors:
-            continue
-        score = max(_cosine(query_vec, svec) for svec in task_vectors)
-        ranked.append((task, score))
-
-    if not ranked:
-        return "unknown", {"reason": "no_samples"}, []
-
-    ranked.sort(key=lambda x: x[1], reverse=True)
-    top1_task, top1_score = ranked[0]
-    top2_score = ranked[1][1] if len(ranked) > 1 else -1.0
-    margin = top1_score - top2_score
-
-    top1_min = ROUTER_TOP1_MIN
-    margin_min = ROUTER_MARGIN_MIN
-    decision = top1_task
-
-    if top1_score < top1_min or margin < margin_min:
-        decision = "unknown"
-
-    if decision == "email_draft":
-        hint_present = (
-            _has_email_struct(user_input)
-            or _contains_any(user_input, _EMAIL_WRITE_HINTS)
-            or _contains_any(user_input, _EMAIL_EDIT_HINTS)
-        )
-        if not hint_present and top1_score <= EMAIL_DRAFT_HIGH_CONF_THRESHOLD:
-            decision = "unknown"
-
-    if decision == "file_extract":
-        if not (_has_file_path_hint(user_input) and _contains_any(user_input, _FILE_EXTRACT_HINTS)):
-            decision = "unknown"
-
-    debug = {
-        "mode": "semantic",
-        "top1_task": top1_task,
-        "top1_score": round(top1_score, 4),
-        "top2_score": round(top2_score, 4),
-        "margin": round(margin, 4),
-        "decision": decision,
-        "threshold_top1": top1_min,
-        "threshold_margin": margin_min,
-        "ranked": [{"task": t, "score": round(s, 4)} for t, s in ranked[:4]],
-    }
-    return decision, debug, query_vec
-
-
-def task_router_node(state: GraphState) -> GraphState:
+def task_router_node(state: GraphState) -> Dict[str, Any]:
     print("--- [NODE] Task Router ---")
 
-    trace_id = (state.get("trace_id") or "")
+    trace_id   = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
-    task_args = state.get("task_args") or {}
+    task_args  = state.get("task_args") or {}
 
     trace_buffer.push(trace_id, node="task_router", event="enter", label="execute",
                       data={"input": user_input[:200]})
@@ -240,101 +73,44 @@ def task_router_node(state: GraphState) -> GraphState:
                           data={"task_type": "knowledge_search", "mode": "empty_input"})
         return {"task_type": "knowledge_search", "task_args": task_args}
 
+    # ── 세션 컨텍스트 구성 ────────────────────────────────────────
+    file_context_present = bool((state.get("file_context") or "").strip())
+    prev_task            = (state.get("task_type") or "").strip()
+    prev_messages        = state.get("messages") or []
+
+    context_lines: List[str] = []
+    if file_context_present:
+        file_name = (state.get("file_context_name") or "파일")
+        context_lines.append(f"- 현재 세션에 '{file_name}' 파일이 업로드되어 있습니다.")
+    else:
+        context_lines.append("- 현재 세션에 업로드된 파일이 없습니다.")
+
+    if prev_task in ("knowledge_search", "detail_search") and prev_messages:
+        context_lines.append(f"- 직전 작업: {prev_task} (심화 질의 가능)")
+
+    context_section = "\n".join(context_lines)
+
     try:
-        routed, debug, query_vec = _semantic_route(user_input)
+        llm_router = get_llm().with_structured_output(RouteDecision)
+        decision: RouteDecision = llm_router.invoke([
+            SystemMessage(content=_ROUTER_SYSTEM + f"\n\n[현재 세션 정보]\n{context_section}"),
+            HumanMessage(content=user_input),
+        ])
 
-        if routed == "unknown":
-            llm_task, llm_debug = llm_intent_fallback(user_input)
-            debug["llm_fallback"] = llm_debug
-            if llm_task != "unknown":
-                routed = llm_task
-                debug["decision"] = llm_task
-                debug["final_source"] = "llm_fallback"
-                added = add_sample(llm_task, user_input, source="llm_fallback")
-                if added:
-                    invalidate_sample_cache()
-            else:
-                debug["final_source"] = "unknown"
-        else:
-            debug["final_source"] = "semantic"
+        routed        = decision.task
+        missing_slots = list(decision.missing_slots)
 
-        # 복합 요청 감지: 검색 + 작성 패턴이 동시 존재 (injection/file 계열 제외)
-        if routed not in ("injection", "file_chat", "file_extract") and _is_compound_request(user_input):
-            routed = "planner"
-            debug["decision"] = "planner"
-            debug["final_source"] = "compound_request_detected"
-
-        # 상세 검색 감지: 후속 심화 패턴 + 직전 task가 knowledge_search/detail_search + 메시지 존재
-        if routed in ("unknown", "knowledge_search"):
-            prev_task = (state.get("task_type") or "").strip()
-            prev_messages = state.get("messages") or []
-            if (
-                prev_task in ("knowledge_search", "detail_search")
-                and prev_messages
-                and _contains_any(user_input, _DETAIL_HINTS)
-            ):
-                routed = "detail_search"
-                debug["decision"] = "detail_search"
-                debug["final_source"] = "detail_search_detected"
-
-        # file_context 있는데 unknown이면 file_chat으로 fallback
-        file_context_present = bool((state.get("file_context") or "").strip())
-        file_path_present = _has_file_slot_reference(task_args.get("file_path"))
-        pending_slots = [slot for slot in (task_args.get("missing_slots") or []) if slot in ("file_path", "file_context")]
-
-        if routed == "unknown" and file_context_present:
-            routed = "file_chat"
-            debug["decision"] = "file_chat"
-            debug["final_source"] = "file_context_fallback"
-
-        if routed == "unknown" and pending_slots:
-            if file_context_present:
-                routed = "file_chat"
-                debug["decision"] = "file_chat"
-                debug["final_source"] = "pending_file_slot_resolved"
-            elif file_path_present or _has_file_path_hint(user_input):
-                routed = "file_extract"
-                debug["decision"] = "file_extract"
-                debug["final_source"] = "pending_file_slot_resolved"
-            else:
-                routed = "clarification"
-                debug["decision"] = "clarification"
-                debug["final_source"] = "pending_file_slot"
-                debug["missing_slots"] = pending_slots
-
-        if routed == "unknown" and file_path_present:
-            routed = "file_extract"
-            debug["decision"] = "file_extract"
-            debug["final_source"] = "file_path_resume"
-
-        if routed == "file_chat" and not file_context_present and file_path_present:
-            routed = "file_extract"
-            debug["decision"] = "file_extract"
-            debug["final_source"] = "file_path_resume"
-
-        # ?? Priority 3: ?? ?? ?? ???????????????????????????????
-        missing_slots: list[str] = []
-
-        # file_path: user_input?? ?????, task_args? ?? ???? ??
-        if routed == "file_extract" and not _has_file_path_hint(user_input) and not file_path_present:
-            missing_slots = ["file_path"]
-        # file_context: state?? ?? ????, file_path? ??? file_extract? ?? ??
-        elif routed == "file_chat" and not file_context_present and not file_path_present:
-            missing_slots = ["file_context"]
-        # to: user_input?? ?????, task_args? ?? ???? ??
-        elif routed == "email_draft" and not _has_recipient_hint(user_input) and not task_args.get("to"):
-            # email_edit ??? ??? ??? ?? draft ????? ??
-            if not _contains_any(user_input, _EMAIL_EDIT_HINTS):
-                missing_slots = ["to"]
-        # project_scope: user_input?? ?????, task_args? ?? ???? ??
-        elif routed == "rfp_draft" and not _has_rfp_scope_hint(user_input) and not task_args.get("project_scope"):
-            missing_slots = ["project_scope"]
+        debug: Dict[str, Any] = {
+            "mode":          "llm",
+            "decision":      routed,
+            "missing_slots": missing_slots,
+            "final_source":  "llm_router",
+        }
 
         if missing_slots:
-            routed = "clarification"
-            debug["decision"] = "clarification"
+            routed                = "clarification"
+            debug["decision"]     = "clarification"
             debug["final_source"] = "slot_missing"
-            debug["missing_slots"] = missing_slots
 
         merged_args = {**task_args, "routing_debug": debug}
         if missing_slots:
@@ -342,32 +118,29 @@ def task_router_node(state: GraphState) -> GraphState:
 
         trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
                           data={
-                              "task_type": routed,
-                              "mode": debug.get("mode", ""),
+                              "task_type":    routed,
+                              "mode":         "llm",
                               "final_source": debug.get("final_source", ""),
-                              "top1_score": debug.get("top1_score", ""),
-                              "margin": debug.get("margin", ""),
                           })
         return {"task_type": routed, "task_args": merged_args}
 
     except Exception as e:
-        fallback = _rule_based_route(user_input)
-        merged_args = {
-            **task_args,
-            "routing_debug": {
-                "mode": "rule_fallback", "decision": fallback,
-                "final_source": "rule_fallback", "reason": str(e),
-            },
+        # LLM 실패 시 knowledge_search로 안전 폴백
+        fallback_debug: Dict[str, Any] = {
+            "mode":         "error_fallback",
+            "decision":     "knowledge_search",
+            "final_source": "error_fallback",
+            "reason":       str(e),
         }
         trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
-                          data={"task_type": fallback, "mode": "rule_fallback", "error": str(e)})
-        return {"task_type": fallback, "task_args": merged_args}
+                          data={"task_type": "knowledge_search", "mode": "error_fallback", "error": str(e)})
+        return {"task_type": "knowledge_search", "task_args": {**task_args, "routing_debug": fallback_debug}}
 
 
 def rejection_node(state: GraphState) -> Dict[str, Any]:
     print("--- [NODE] Rejection ---")
     user_input = (state.get("input_data") or "").strip()
-    trace_id = (state.get("trace_id") or "")
+    trace_id   = (state.get("trace_id") or "")
     trace_buffer.push(trace_id, node="rejection", event="exit", label="execute",
                       data={"input": user_input[:200]})
     return {
@@ -380,32 +153,19 @@ def rejection_node(state: GraphState) -> Dict[str, Any]:
     }
 
 
-def _unknown_fallback_route(state: GraphState) -> str:
-    """Unknown task를 AI 안내 또는 지식 검색으로 우선 실행."""
-    user_input = (state.get("input_data") or "").strip()
-    _AI_GUIDE_TRIGGERS = [
-        "안녕", "반가워", "뭐 할 수 있어", "무슨 기능", "도움말", "help",
-        "소개해", "뭐야", "누구야", "어떤 ai", "기능 안내", "사용법",
-    ]
-    if len(user_input) <= 15 or _contains_any(user_input, _AI_GUIDE_TRIGGERS):
-        return "ai_guide"
-    return "knowledge_search"
+_ALLOWED = {
+    "knowledge_search", "ai_guide", "file_chat", "file_extract",
+    "email_draft", "rfp_draft", "detail_search", "planner",
+    "clarification", "rejection",
+}
 
 
 def route_by_task(state: GraphState) -> str:
     task = (state.get("task_type") or "knowledge_search").strip()
-    if task == "chat":
+    if task in ("chat", "unknown", ""):
         return "knowledge_search"
-    if task in ("unknown", ""):
-        return _unknown_fallback_route(state)
     if task == "injection":
         return "rejection"
-    if task == "clarification":
-        return "clarification"
-    if task == "detail_search":
-        return "detail_search"
-    if task == "planner":
-        return "planner"
     if task in _ALLOWED:
         return task
     return "knowledge_search"
