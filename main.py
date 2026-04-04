@@ -415,6 +415,19 @@ async def chat_endpoint(request: Request):
     except Exception:
         pending = []
 
+    # ── 폴백: tasks[].interrupts가 비어 있어도 state.next로 재감지 ──
+    if not pending and new_state and any(n in _INTERRUPT_NODES for n in (new_state.next or ())):
+        from app.graph.nodes.clarification import _SLOT_QUESTIONS
+        state_vals = new_state.values or {}
+        task_args  = state_vals.get("task_args") or {}
+        missing_slots: list = task_args.get("missing_slots") or []
+        if missing_slots:
+            slot = missing_slots[0]
+            msg  = _SLOT_QUESTIONS.get(slot, f"'{slot}' 정보를 알려주세요.")
+        else:
+            msg = state_vals.get("input_data") or ""
+        pending = [type("_IV", (), {"value": {"type": "clarification", "message": msg}})()]
+
     if pending:
         iv = pending[0]
         interrupt_data = iv.value if hasattr(iv, "value") else iv
