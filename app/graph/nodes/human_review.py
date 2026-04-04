@@ -8,7 +8,11 @@ from langgraph.types import interrupt
 
 from app.core import trace_buffer
 from app.graph.states.state import GraphState
-from app.graph.nodes.task_router import _semantic_route, _contains_any
+
+
+def _contains_any(text: str, hints: list) -> bool:
+    t = text.lower()
+    return any(h.lower() in t for h in hints)
 
 # 승인 키워드
 _APPROVE_HINTS = [
@@ -55,7 +59,7 @@ def human_review_node(state: GraphState) -> Dict[str, Any]:
     2. 재개 후 응답 분류:
        - approve : 키워드 기반 → END
        - revise  : 키워드 기반 → email/rfp_draft 루프백
-       - switch  : _semantic_route()로 현재 task와 다른 task 감지 → task_router 루프백
+       - switch  : 승인·수정 키워드 없는 입력 → 새 요청으로 간주 → task_router 루프백
     """
     print("--- [NODE] Human Review ---")
 
@@ -93,22 +97,16 @@ def human_review_node(state: GraphState) -> Dict[str, Any]:
             ],
         }
 
-    # 2) switch 판단: 수정 키워드가 없을 때만 semantic routing으로 task 전환 감지
-    # 수정 힌트가 있는 경우 현재 초안 수정 요청으로 간주 (switch 건너뜀)
+    # 2) switch 판단: 승인도 수정도 아닌 입력 → 새 요청으로 간주, task_router로 전환
     if not _contains_any(user_response_str, _REVISE_HINTS):
-        try:
-            routed, _, _ = _semantic_route(user_response_str)
-            if routed not in ("unknown", current_task) and routed != "":
-                trace_buffer.push(trace_id, node="human_review", event="exit", label="execute",
-                                  data={"action": "switch", "new_task": routed})
-                return {
-                    "review_action": "switch",
-                    "input_data": user_response_str,
-                    "task_type": "",   # task_router가 재분류
-                    "messages": [HumanMessage(content=user_response_str)],
-                }
-        except Exception:
-            pass
+        trace_buffer.push(trace_id, node="human_review", event="exit", label="execute",
+                          data={"action": "switch"})
+        return {
+            "review_action": "switch",
+            "input_data": user_response_str,
+            "task_type": "",   # task_router가 재분류
+            "messages": [HumanMessage(content=user_response_str)],
+        }
 
     # 3) 수정 요청 (기본)
     trace_buffer.push(trace_id, node="human_review", event="exit", label="execute",
