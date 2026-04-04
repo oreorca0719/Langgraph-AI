@@ -398,9 +398,10 @@ async def chat_endpoint(request: Request):
         result = graph_app.invoke(Command(resume=user_input), config=config)
     else:
         inputs = {
-            "trace_id":   trace_id,
-            "input_data": user_input,
-            "task_args":  {},
+            "trace_id":      trace_id,
+            "input_data":    user_input,
+            "task_args":     {},
+            "review_action": None,   # 이전 approve 상태가 다음 요청까지 잔류하는 문제 방지
         }
         result = graph_app.invoke(inputs, config=config)
 

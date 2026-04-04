@@ -28,12 +28,20 @@ _FILE_EXTRACT_HINTS = ["추출", "파싱", "텍스트", "본문", "extract", "pa
 # ── Priority 3: 슬롯 감지용 상수 ──────────────────────────────
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
+# 이름+직함 또는 방향 조사 패턴: "신수연 담당자", "업스테이지에게", "김팀장님께" 등
+_PERSON_TITLE_RE = re.compile(
+    r"[가-힣A-Za-z0-9]+\s*(?:에게|께|님께)|"
+    r"[가-힣A-Za-z0-9]+\s*(?:담당자|팀장|부장|과장|차장|대리|이사|대표|사원|매니저)",
+    re.I,
+)
+
 _DEPT_NAMES = ["인사팀", "hr", "총무팀", "재무팀", "회계팀", "it지원팀", "it 지원팀",
                "마케팅팀", "영업팀", "개발팀", "법무팀", "기획팀", "경영지원팀"]
 
 _RFP_SCOPE_HINTS = ["프로젝트", "시스템", "솔루션", "플랫폼", "구축", "개발", "도입",
                     "고도화", "전환", "운영", "서비스", "인프라", "제안", "설계", "구현",
-                    "마이그레이션", "통합", "개선", "최적화", "리팩토링", "업그레이드"]
+                    "마이그레이션", "통합", "개선", "최적화", "리팩토링", "업그레이드",
+                    "프로그램", "교육", "과정", "앱", "애플리케이션", "기획", "컨설팅", "분석"]
 
 # (선행 작업 패턴, 후행 작업 패턴): 두 조건이 동시에 존재하면 복합 요청으로 판단
 _COMPOUND_SIGNALS: List[Tuple[List[str], List[str]]] = [
@@ -79,10 +87,12 @@ def _has_file_slot_reference(value: Any) -> bool:
 
 
 def _has_recipient_hint(text: str) -> bool:
-    """이메일 수신자 힌트: 이메일 주소 or 부서명 포함 여부."""
+    """이메일 수신자 힌트: 이메일 주소, 부서명, 또는 이름+직함/방향 조사 포함 여부."""
     if _EMAIL_RE.search(text or ""):
         return True
     if _contains_any(text, _DEPT_NAMES):
+        return True
+    if _PERSON_TITLE_RE.search(text or ""):
         return True
     return False
 
