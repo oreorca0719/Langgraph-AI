@@ -15,9 +15,7 @@ from app.core.config import (
 )
 from app.core import trace_buffer
 from app.core.history_utils import (
-    HISTORY_MAX_MESSAGES,
     extract_text_content,
-    filter_history_by_relevance as _filter_history_by_relevance,
 )
 from app.graph.states.state import GraphState
 from app.security.content_sanitizer import sanitize_docs
@@ -265,8 +263,6 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
 
     trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
-    raw_history = list(state.get("messages") or [])[-HISTORY_MAX_MESSAGES:]
-    chat_history = _filter_history_by_relevance(raw_history, user_input)
     task_args = state.get("task_args") or {}
     docs: List[Document] = task_args.get("search_docs") or []
 
@@ -292,7 +288,6 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
         )
         messages = (
             [SystemMessage(content=system_content)]
-            + chat_history
             + [HumanMessage(content=user_input)]
         )
         response = get_llm().invoke(messages)

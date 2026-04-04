@@ -5,14 +5,12 @@ import os
 import re
 from typing import Any, Dict
 
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
 
 from app.core.config import get_llm
 from app.core import trace_buffer
 from app.core.history_utils import (
     extract_text_content as _content_to_text,
-    filter_history_by_relevance as _filter_history_by_relevance,
-    HISTORY_MAX_MESSAGES,
 )
 from app.graph.states.state import GraphState
 
@@ -131,8 +129,6 @@ def email_draft_node(state: GraphState) -> GraphState:
 
     trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
-    raw_history  = list(state.get("messages") or [])[-HISTORY_MAX_MESSAGES:]
-    chat_history = _filter_history_by_relevance(raw_history, user_input)
     args = state.get("task_args") or {}
     prev_draft = state.get("draft_email") or {}
     planner_context = (state.get("planner_context") or "").strip()
@@ -175,7 +171,6 @@ def email_draft_node(state: GraphState) -> GraphState:
                 "수신자는 오직 현재 요청과 '결정된 수신자' 항목에서만 파악하세요."
             ),
         ),
-        MessagesPlaceholder(variable_name="chat_history"),
         (
             "human",
             "요청:\n{user_input}\n\n"
@@ -191,7 +186,6 @@ def email_draft_node(state: GraphState) -> GraphState:
         if planner_context else ""
     )
     resp = (prompt | llm).invoke({
-        "chat_history": chat_history,
         "user_input": user_input,
         "prev_draft_json": json.dumps(prev_draft_norm, ensure_ascii=False),
         "args_json": json.dumps(args, ensure_ascii=False),

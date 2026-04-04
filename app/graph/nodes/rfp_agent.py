@@ -6,14 +6,12 @@ from typing import Any, Dict
 import re
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate
 
 from app.core.config import get_llm
 from app.core import trace_buffer
 from app.core.history_utils import (
     extract_text_content as _content_to_text,
-    filter_history_by_relevance as _filter_history_by_relevance,
-    HISTORY_MAX_MESSAGES,
 )
 from app.graph.states.state import GraphState
 from app.graph.nodes.knowledge_search import _search_hybrid, _format_docs
@@ -127,8 +125,6 @@ def rfp_draft_node(state: GraphState) -> Dict[str, Any]:
 
     trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
-    raw_history  = list(state.get("messages") or [])[-HISTORY_MAX_MESSAGES:]
-    chat_history = _filter_history_by_relevance(raw_history, user_input)
     args = state.get("task_args") or {}
     research = (state.get("rfp_research") or "").strip()
     review_notes = (state.get("rfp_review_notes") or "").strip()
@@ -162,13 +158,10 @@ def rfp_draft_node(state: GraphState) -> Dict[str, Any]:
         human_parts.append(f"기존 초안 (수정 기준):\n{existing_draft[:10000]}")
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_content),
-        MessagesPlaceholder(variable_name="chat_history"),
         ("human", "\n\n".join(human_parts)),
     ])
 
-    resp = (prompt | llm).invoke({
-        "chat_history": chat_history,
-    })
+    resp = (prompt | llm).invoke({})
 
     draft_text = _content_to_text(resp.content if hasattr(resp, "content") else resp)
 
