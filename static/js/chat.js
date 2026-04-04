@@ -1,7 +1,18 @@
 // /static/js/chat.js
 
-// 페이지 로드 시 대화 히스토리 초기화
-fetch('/chat/reset', { method: 'POST' });
+// 새 대화 버튼
+document.getElementById('new-chat-btn').addEventListener('click', async () => {
+  await fetch('/chat/reset', { method: 'POST' });
+  chatBox.innerHTML = `
+    <div class="message bot">
+      <div class="bot-avatar"></div>
+      <div class="content">
+        <p class="message-title">Assistant</p>
+        안녕하세요.<br><br>저는 임직원의 업무 효율을 높이기 위해 도입된 사내 AI 어시스턴트입니다.<br><br>어떤 도움이 필요하신가요?
+      </div>
+    </div>`;
+  chatBox.scrollTop = 0;
+});
 
 const chatBox   = document.getElementById('chat-box');
 const userInput = document.getElementById('user-input');

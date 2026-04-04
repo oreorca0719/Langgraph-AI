@@ -80,10 +80,16 @@ def human_review_node(state: GraphState) -> Dict[str, Any]:
     if _contains_any(user_response_str, _APPROVE_HINTS):
         trace_buffer.push(trace_id, node="human_review", event="exit", label="execute",
                           data={"action": "approve"})
+        from langchain_core.messages import AIMessage
         return {
             "review_action": "approve",
             "input_data": user_response_str,
-            "messages": [HumanMessage(content=user_response_str)],
+            "draft_email": None,
+            "draft_rfp": "",
+            "messages": [
+                HumanMessage(content=user_response_str),
+                AIMessage(content="확인되었습니다. 작업이 완료되었습니다."),
+            ],
         }
 
     # 2) switch 판단: 수정 키워드가 없을 때만 semantic routing으로 task 전환 감지

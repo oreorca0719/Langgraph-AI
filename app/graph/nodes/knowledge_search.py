@@ -41,6 +41,14 @@ _MAX_RETRY = 2
 _HYBRID_FETCH_MULTIPLIER = 4
 
 
+def invalidate_bm25_cache() -> None:
+    """문서 재인제스트 후 BM25 인덱스를 초기화합니다."""
+    global _bm25_index, _bm25_docs
+    with _bm25_lock:
+        _bm25_index = None
+        _bm25_docs = []
+
+
 def _get_chroma() -> Chroma:
     global _chroma_instance
     if _chroma_instance is None:
@@ -300,9 +308,20 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
     trace_buffer.push(trace_id, node="answer", event="exit", label="execute",
                       data={"response_len": len(str(final_message.content))})
 
+    citations_used = []
+    for i, doc in enumerate(docs, start=1):
+        md = getattr(doc, "metadata", {}) or {}
+        raw_path = md.get("display_source") or md.get("path") or ""
+        citations_used.append({
+            "id": i,
+            "title": md.get("title") or md.get("file_name") or f"문서 {i}",
+            "snippet": (doc.page_content or "")[:200],
+            "path": raw_path,
+        })
+
     return {
         "messages": [HumanMessage(content=user_input), final_message],
-        "citations_used": [],
+        "citations_used": citations_used,
         "retry_count": 0,
-        "clarification_count": 0,  # 정상 경로 진입 시 루프 카운터 리셋
+        "clarification_count": 0,
     }

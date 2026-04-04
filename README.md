@@ -1,4 +1,4 @@
-# Langgraph-Rag
+# Langgraph-AI
 
 사내 업무 보조 AI 어시스턴트 — LangGraph + RAG 기반 FastAPI 백엔드
 
@@ -290,11 +290,14 @@ task_args 보존: LLM clarification 재개 시 context 유지
 ## 디렉토리 구조
 
 ```
-Langgraph-Rag/
+Langgraph-AI/
 ├── main.py                        # FastAPI 앱 엔트리포인트 + LangGraph 플랫 그래프 구성
 ├── requirements.txt
 ├── Dockerfile
 ├── .dockerignore
+├── .env.example                   # 환경변수 템플릿
+├── policy-dynamo-users.json       # DynamoDB IAM 정책 파일
+├── trust-apprunner-instance.json  # App Runner IAM 신뢰 정책 파일
 ├── .github/workflows/deploy.yml   # CI/CD 파이프라인
 │
 ├── app/
@@ -347,7 +350,8 @@ Langgraph-Rag/
 │   ├── admin_home.html            # 관리자 홈
 │   ├── admin_users.html           # 사용자 관리
 │   ├── admin_monitor.html         # 라우팅 성능 모니터링 + 실시간 로그
-│   └── admin_graph.html           # LangGraph 구조 시각화 + 실시간 실행 흐름
+│   ├── admin_graph.html           # LangGraph 구조 시각화 + 실시간 실행 흐름
+│   └── pending.html               # 승인 대기 안내 페이지
 │
 └── static/
     ├── css/style.css

@@ -7,7 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.core.config import get_llm, RETRIEVAL_TOP_K
 from app.core import trace_buffer
-from app.core.history_utils import extract_text_content
+from app.core.history_utils import extract_text_content as extract_text_content
 from app.graph.nodes.knowledge_search import _get_chroma, _search_hybrid
 from app.graph.states.state import GraphState
 from app.security.content_sanitizer import sanitize_docs
@@ -91,9 +91,9 @@ def detail_search_node(state: GraphState) -> Dict[str, Any]:
     prev_ai = ""
     for msg in reversed(messages):
         if not prev_ai and isinstance(msg, AIMessage):
-            prev_ai = str(msg.content)
+            prev_ai = extract_text_content(msg.content)
         elif prev_ai and not prev_human and isinstance(msg, HumanMessage):
-            prev_human = str(msg.content)
+            prev_human = extract_text_content(msg.content)
             break
 
     trace_buffer.push(trace_id, node="detail_search", event="enter", label="execute",
@@ -118,7 +118,6 @@ def detail_search_node(state: GraphState) -> Dict[str, Any]:
                       })
 
     return {
-        "input_data": reconstructed_query,
         "task_args": {**task_args, "search_docs": docs, "search_query": reconstructed_query},
         "clarification_count": 0,
     }

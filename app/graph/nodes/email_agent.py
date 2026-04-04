@@ -9,7 +9,11 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from app.core.config import get_llm
 from app.core import trace_buffer
-from app.core.history_utils import extract_text_content as _content_to_text
+from app.core.history_utils import (
+    extract_text_content as _content_to_text,
+    filter_history_by_relevance as _filter_history_by_relevance,
+    HISTORY_MAX_MESSAGES,
+)
 from app.graph.states.state import GraphState
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -127,7 +131,8 @@ def email_draft_node(state: GraphState) -> GraphState:
 
     trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
-    chat_history = state.get("messages", [])
+    raw_history  = list(state.get("messages") or [])[-HISTORY_MAX_MESSAGES:]
+    chat_history = _filter_history_by_relevance(raw_history, user_input)
     args = state.get("task_args") or {}
     prev_draft = state.get("draft_email") or {}
     planner_context = (state.get("planner_context") or "").strip()

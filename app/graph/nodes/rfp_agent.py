@@ -10,7 +10,11 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from app.core.config import get_llm
 from app.core import trace_buffer
-from app.core.history_utils import extract_text_content as _content_to_text
+from app.core.history_utils import (
+    extract_text_content as _content_to_text,
+    filter_history_by_relevance as _filter_history_by_relevance,
+    HISTORY_MAX_MESSAGES,
+)
 from app.graph.states.state import GraphState
 from app.graph.nodes.knowledge_search import _search_hybrid, _format_docs
 from app.security.content_sanitizer import sanitize_docs
@@ -123,7 +127,8 @@ def rfp_draft_node(state: GraphState) -> Dict[str, Any]:
 
     trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
-    chat_history = state.get("messages") or []
+    raw_history  = list(state.get("messages") or [])[-HISTORY_MAX_MESSAGES:]
+    chat_history = _filter_history_by_relevance(raw_history, user_input)
     args = state.get("task_args") or {}
     research = (state.get("rfp_research") or "").strip()
     review_notes = (state.get("rfp_review_notes") or "").strip()

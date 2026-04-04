@@ -443,6 +443,16 @@ async def chat_endpoint(request: Request):
     # ── 응답 포맷팅 ───────────────────────────────────────────
     task_type = (result.get("task_type") or "").strip()
 
+    # 승인 완료: draft가 초기화되었으면 완료 메시지 반환
+    if (result.get("review_action") == "approve"
+            and not result.get("draft_email")
+            and not result.get("draft_rfp")):
+        return {
+            "type": "chat",
+            "answer": "확인되었습니다. 작업이 완료되었습니다.",
+            "sources": [],
+        }
+
     if task_type == "file_extract":
         text = (result.get("extracted_text") or "")[:20000]
         return {
