@@ -18,7 +18,7 @@ class RouteDecision(BaseModel):
         "file_chat", "file_extract", "ai_guide",
         "detail_search", "planner", "rejection",
     ]
-    missing_slots: List[Literal["to", "project_scope", "file_path", "file_context"]] = Field(
+    missing_slots: List[Literal["to", "subject", "project_scope", "rfp_content", "file_path", "file_context"]] = Field(
         default_factory=list,
         description="태스크 실행에 필요하지만 사용자 입력에 없는 슬롯",
     )
@@ -44,12 +44,15 @@ _ROUTER_SYSTEM = """\
 
 [missing_slots 판단 기준]
 - "to"            : email_draft인데 수신자(사람·부서·회사)를 전혀 특정할 수 없을 때
+- "subject"       : email_draft인데 이메일의 목적·주제·내용을 전혀 알 수 없을 때
 - "project_scope" : rfp_draft인데 대상 프로젝트·범위를 전혀 알 수 없을 때
+- "rfp_content"   : rfp_draft인데 프로젝트 범위는 있으나 요구사항·목적·배경을 전혀 알 수 없을 때
 - "file_path"     : file_extract인데 파일 경로·파일명이 없을 때
 - "file_context"  : file_chat인데 업로드된 파일이 없다고 명시된 경우
 
 [판단 원칙]
 - 수신자가 회사명·부서명·직함으로라도 특정된다면 "to" 슬롯은 누락이 아닙니다.
+- 이메일 목적·주제가 조금이라도 언급되면 "subject" 슬롯은 누락이 아닙니다.
 - detail_search는 직전 대화에서 knowledge_search·detail_search가 있었을 때만 선택하세요.
 - planner는 "~검색해서 ~작성해줘" 처럼 선행 조사 + 후행 작성이 명확히 결합된 경우입니다.
 - 애매하면 knowledge_search를 기본으로 선택하세요.
@@ -108,6 +111,7 @@ def task_router_node(state: GraphState) -> Dict[str, Any]:
         }
 
         if missing_slots:
+            debug["original_task"] = routed          # 원래 task 보존 (clarification 확인 메시지용)
             routed                = "clarification"
             debug["decision"]     = "clarification"
             debug["final_source"] = "slot_missing"

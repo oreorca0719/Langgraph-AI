@@ -36,7 +36,9 @@ _SLOT_QUESTIONS: dict[str, str] = {
     "file_path":     "분석할 파일 경로 또는 파일명을 알려주세요.",
     "file_context":  "첨부 파일이 필요합니다. 먼저 파일을 업로드해 주세요.",
     "to":            "이메일 수신자 또는 받는 부서를 알려주세요. (예: hr@example.com 또는 인사팀)",
+    "subject":       "이메일의 목적이나 주요 내용을 알려주세요. (예: AI 교육 제안 관련 미팅 요청)",
     "project_scope": "RFP 대상 프로젝트명이나 제안 범위를 알려주세요.",
+    "rfp_content":   "RFP에 포함할 주요 요구사항이나 목적을 알려주세요. (예: 기존 시스템 연동 필요, 6개월 내 납품 목표)",
 }
 
 
@@ -64,8 +66,8 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
     trace_buffer.push(trace_id, node="clarification", event="enter", label="execute",
                       data={"input": user_input[:200], "count": clarification_count, "missing_slots": missing_slots})
 
-    # 루프 방어: 2회 이상 발동 시 강제 knowledge_search fallback
-    if clarification_count >= 2:
+    # 루프 방어: 3회 이상 발동 시 강제 knowledge_search fallback (슬롯 2단계 수집 허용)
+    if clarification_count >= 3:
         trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
                           data={"result": "loop_fallback"})
         old_args = state.get("task_args") or {}
@@ -99,8 +101,8 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
         slot_invalid = False
         if slot in {"file_path", "file_context"} and not _looks_like_file_reference(normalized_response):
             slot_invalid = True
-        elif slot == "to" and _COMMAND_RE.search(normalized_response):
-            # 명령형 문장은 수신자가 아님 (예: "이메일 초안 하나 생성해줘")
+        elif slot in {"to", "subject"} and _COMMAND_RE.search(normalized_response):
+            # 명령형 문장은 슬롯 값이 아님 (예: "이메일 초안 하나 생성해줘")
             slot_invalid = True
 
         if slot_invalid:
@@ -126,11 +128,16 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
         }
         _SLOT_LABELS = {
             "to":            f"수신자: {normalized_response}",
+            "subject":       f"내용: {normalized_response}",
             "project_scope": f"범위: {normalized_response}",
+            "rfp_content":   f"요구사항: {normalized_response}",
             "file_path":     f"파일: {normalized_response}",
             "file_context":  f"파일: {normalized_response}",
         }
-        task_label = _TASK_LABELS.get(task_type, "요청")
+        # task_args의 routing_debug에서 원래 의도된 task 이름 가져오기
+        routing_debug = task_args.get("routing_debug") or {}
+        intended_task = routing_debug.get("original_task") or task_type
+        task_label = _TASK_LABELS.get(intended_task, "요청")
         slot_label = _SLOT_LABELS.get(slot, normalized_response)
         confirm_msg = (
             f"요청하신 내용을 확인했습니다.\n\n"
@@ -145,6 +152,10 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
 
         if slot == "to":
             new_task_args["to"] = normalized_response
+        elif slot == "subject":
+            new_task_args["subject"] = normalized_response
+        elif slot == "rfp_content":
+            new_task_args["rfp_content"] = normalized_response
         elif slot in {"file_path", "file_context"}:
             new_task_args["file_path"] = normalized_response
         elif slot == "project_scope":
