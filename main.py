@@ -158,10 +158,11 @@ workflow.add_conditional_edges(
     "human_review",
     route_after_review,
     {
-        "end":        END,
-        "task_router": "task_router",
-        "email_draft": "email_draft",
-        "rfp_draft":   "rfp_draft",
+        "end":          END,
+        "task_router":  "task_router",
+        "email_draft":  "email_draft",
+        "rfp_draft":    "rfp_draft",
+        "human_review": "human_review",  # stay: 이탈 거부 시 draft 재표시
     },
 )
 
@@ -443,12 +444,12 @@ async def chat_endpoint(request: Request):
         interrupt_data = iv.value if hasattr(iv, "value") else iv
         if not isinstance(interrupt_data, dict):
             interrupt_data = {}
-        # clarification interrupt: 이전 세션의 draft 상태가 잔류해도 내려보내지 않음
-        # human_review interrupt: draft 구조 데이터를 함께 포함해 JS가 직접 렌더링 가능하도록 함
+        # clarification/task_switch_confirm: 이전 세션 draft 노출 차단
+        # human_review: draft 구조 데이터 포함
         interrupt_type_val = interrupt_data.get("type", "")
-        is_clarification   = (interrupt_type_val == "clarification")
+        is_clarification   = interrupt_type_val in ("clarification", "task_switch_confirm")
         current_task = (
-            "clarification" if is_clarification
+            interrupt_type_val if is_clarification
             else (result.get("current_task") or result.get("task_type") or "").strip()
         )
         return JSONResponse({

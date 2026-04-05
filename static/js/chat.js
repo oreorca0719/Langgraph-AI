@@ -242,8 +242,28 @@ async function send() {
 
     let markdownText = '';
     if (data.type === 'interrupt') {
-      // 구조 데이터가 있으면 우선 사용, 없으면 raw message fallback
-      if (data.current_task === 'email_draft' && data.draft_email) {
+      if (data.interrupt_type === 'task_switch_confirm') {
+        // 작업 이탈 확인: 예/아니오 버튼 렌더링
+        const msg = escapeHtml(data.message || '');
+        const html = `<p>${msg.replace(/\n/g, '<br>')}</p>
+          <div style="display:flex;gap:8px;margin-top:12px;">
+            <button class="confirm-btn" data-value="예"
+              style="padding:6px 20px;border-radius:6px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-size:14px;">예</button>
+            <button class="confirm-btn" data-value="아니오"
+              style="padding:6px 20px;border-radius:6px;border:1px solid #d1d5db;background:#fff;cursor:pointer;font-size:14px;">아니오</button>
+          </div>`;
+        removeLoading(loadingId);
+        appendBot(html);
+        // 버튼 클릭 시 해당 값을 메시지로 전송
+        document.querySelectorAll('.confirm-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            document.querySelectorAll('.confirm-btn').forEach(b => b.disabled = true);
+            userInput.value = btn.dataset.value;
+            send();
+          }, { once: true });
+        });
+        return;
+      } else if (data.current_task === 'email_draft' && data.draft_email) {
         markdownText = emailDraftToMarkdown(data.draft_email);
       } else if ((data.current_task === 'rfp_draft' || data.draft_rfp) && data.draft_rfp) {
         markdownText = rfpDraftToMarkdown(data.draft_rfp);
