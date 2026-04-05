@@ -419,16 +419,24 @@ async def chat_endpoint(request: Request):
 
     # ── 폴백: tasks[].interrupts가 비어 있어도 state.next로 재감지 ──
     if not pending and new_state and any(n in _INTERRUPT_NODES for n in (new_state.next or ())):
-        from app.graph.nodes.clarification import _SLOT_QUESTIONS
         state_vals = new_state.values or {}
-        task_args  = state_vals.get("task_args") or {}
-        missing_slots: list = task_args.get("missing_slots") or []
-        if missing_slots:
-            slot = missing_slots[0]
-            msg  = _SLOT_QUESTIONS.get(slot, f"'{slot}' 정보를 알려주세요.")
+        next_nodes = set(new_state.next or ())
+
+        if "human_review" in next_nodes:
+            # human_review interrupt: draft 포함 응답으로 재구성
+            hint = "수정이 필요하시면 내용을 말씀해 주세요. 완료하시려면 '완료' 또는 '확인'을 입력해 주세요."
+            pending = [type("_IV", (), {"value": {"type": "human_review", "message": "", "hint": hint}})()]
         else:
-            msg = state_vals.get("input_data") or ""
-        pending = [type("_IV", (), {"value": {"type": "clarification", "message": msg}})()]
+            # clarification interrupt
+            from app.graph.nodes.clarification import _SLOT_QUESTIONS
+            task_args  = state_vals.get("task_args") or {}
+            missing_slots: list = task_args.get("missing_slots") or []
+            if missing_slots:
+                slot = missing_slots[0]
+                msg  = _SLOT_QUESTIONS.get(slot, f"'{slot}' 정보를 알려주세요.")
+            else:
+                msg = state_vals.get("input_data") or ""
+            pending = [type("_IV", (), {"value": {"type": "clarification", "message": msg}})()]
 
     if pending:
         iv = pending[0]
