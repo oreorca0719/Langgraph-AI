@@ -14,6 +14,8 @@ from app.graph.states.state import GraphState
 
 
 _FILE_REFERENCE_RE = re.compile(r"(?:^|[\/\s])[^\/\s]+\.(pdf|docx|pptx|xlsx|xlsm|txt|md|csv|log)\b", re.I)
+_YES_RE = re.compile(r"^(예|네|응|ㅇ|yes|y|맞아|그래|벗어날게|벗어나|나갈게|나가)$", re.I)
+_TASK_SWITCH_LABELS = {"email_draft": "이메일", "rfp_draft": "RFP"}
 _COMMAND_RE = re.compile(
     r"(해줘|해주세요|해줄|작성|생성|만들어|써줘|써주|고쳐|수정|바꿔|찾아|알려|보내줘|보내주|초안|이메일|rfp|메일)",
     re.I,
@@ -100,11 +102,28 @@ def clarification_slot_node(state: GraphState) -> Dict[str, Any]:
 
         # 슬롯 응답 유효성 검증
         slot_invalid = False
+        is_task_switch = False
         if slot in {"file_path", "file_context"} and not _looks_like_file_reference(normalized_response):
             slot_invalid = True
         elif slot in {"to", "subject"} and _COMMAND_RE.search(normalized_response):
-            # 명령형 문장은 슬롯 값이 아님 (예: "이메일 초안 하나 생성해줘")
+            # 이메일 슬롯: 명령형은 슬롯 재질문 (주소/부서 제공 유도)
             slot_invalid = True
+        elif slot in {"rfp_content", "project_scope"} and _COMMAND_RE.search(normalized_response):
+            # RFP 슬롯: 명령형 → 작업 전환 시도로 간주
+            is_task_switch = True
+
+        if is_task_switch:
+            routing_debug = task_args.get("routing_debug") or {}
+            original_task = routing_debug.get("original_task") or task_type
+            task_label = _TASK_SWITCH_LABELS.get(original_task, "현재")
+            trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
+                              data={"result": "task_switch_detected", "slot": slot,
+                                    "switch_cmd": normalized_response[:80]})
+            return {
+                "task_type":         "switch_confirm",
+                "pending_switch_cmd": normalized_response,
+                "pending_switch_label": task_label,
+            }
 
         if slot_invalid:
             retry_args = {**task_args, "missing_slots": [slot]}
@@ -231,6 +250,51 @@ def clarification_slot_node(state: GraphState) -> Dict[str, Any]:
     }
 
 
+def clarification_switch_confirm_node(state: GraphState) -> Dict[str, Any]:
+    """
+    clarification 슬롯 수집 중 작업 전환 시도가 감지됐을 때 확인을 받는 노드.
+    interrupt 1회만 사용 (DynamoDB 체크포인터 안정성 보장).
+    - 예 → 새 명령으로 전환 (input_data 교체, task_args 초기화)
+    - 아니오 → 기존 슬롯 수집 유지 (task_args.missing_slots 보존)
+    """
+    print("--- [NODE] Clarification Switch Confirm ---")
+
+    trace_id    = (state.get("trace_id") or "")
+    switch_cmd  = (state.get("pending_switch_cmd") or "").strip()
+    task_label  = (state.get("pending_switch_label") or "현재").strip()
+
+    trace_buffer.push(trace_id, node="clarification_switch_confirm", event="enter", label="execute",
+                      data={"task_label": task_label, "switch_cmd": switch_cmd[:80]})
+
+    confirm_response = interrupt({
+        "type":    "task_switch_confirm",
+        "message": (
+            f"현재 {task_label} 초안 작성 작업이 진행 중입니다.\n"
+            f"현재 작업에서 벗어나시겠습니까?"
+        ),
+    })
+
+    if _YES_RE.match((confirm_response or "").strip()):
+        trace_buffer.push(trace_id, node="clarification_switch_confirm", event="exit", label="execute",
+                          data={"result": "switch_yes"})
+        return {
+            "input_data":          switch_cmd,
+            "task_type":           "",
+            "task_args":           {},
+            "clarification_count": 0,
+            "pending_switch_cmd":  "",
+            "pending_switch_label": "",
+        }
+
+    trace_buffer.push(trace_id, node="clarification_switch_confirm", event="exit", label="execute",
+                      data={"result": "switch_no"})
+    return {
+        "task_type":           "",
+        "pending_switch_cmd":  "",
+        "pending_switch_label": "",
+    }
+
+
 def clarification_confirm_node(state: GraphState) -> Dict[str, Any]:
     """
     슬롯 수집 완료 후 사용자에게 요청 내용을 확인하는 노드.
@@ -267,5 +331,7 @@ def route_after_clarification(state: GraphState) -> str:
     if task == "knowledge_search":
         return "knowledge_search"  # 루프 방어 fallback 경로
     if task == "pending_confirm":
-        return "clarification_confirm"  # 슬롯 수집 완료 → 확인 단계
+        return "clarification_confirm"       # 슬롯 수집 완료 → 확인 단계
+    if task == "switch_confirm":
+        return "clarification_switch_confirm"  # 작업 전환 감지 → 전환 확인 단계
     return "task_router"
