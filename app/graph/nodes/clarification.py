@@ -117,7 +117,30 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
                 "clarification_count": clarification_count + 1,
             }
 
-        combined = f"{user_input} {user_response}".strip()
+        # 슬롯 확인 후 요청 내용 정리해서 재확인 질문
+        _TASK_LABELS = {
+            "email_draft":  "이메일 초안 작성",
+            "rfp_draft":    "RFP 초안 작성",
+            "file_extract": "파일 분석",
+            "file_chat":    "파일 Q&A",
+        }
+        _SLOT_LABELS = {
+            "to":            f"수신자: {normalized_response}",
+            "project_scope": f"범위: {normalized_response}",
+            "file_path":     f"파일: {normalized_response}",
+            "file_context":  f"파일: {normalized_response}",
+        }
+        task_label = _TASK_LABELS.get(task_type, "요청")
+        slot_label = _SLOT_LABELS.get(slot, normalized_response)
+        confirm_msg = (
+            f"요청하신 내용을 확인했습니다.\n\n"
+            f"**{task_label}**\n"
+            f"- {slot_label}\n\n"
+            f"진행할까요?"
+        )
+        interrupt({"type": "clarification", "message": confirm_msg})
+
+        combined = f"{user_input} {normalized_response}".strip()
         new_task_args = {k: v for k, v in task_args.items() if k != "missing_slots"}
 
         if slot == "to":
@@ -128,7 +151,7 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
             new_task_args["project_scope"] = normalized_response
 
         trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
-                          data={"result": "slot_resumed", "slot": slot,
+                          data={"result": "slot_confirmed", "slot": slot,
                                 "combined_len": len(combined), "slot_value_len": len(normalized_response)})
         return {
             "input_data":          combined,
