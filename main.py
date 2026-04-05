@@ -398,10 +398,12 @@ async def chat_endpoint(request: Request):
         result = graph_app.invoke(Command(resume=user_input), config=config)
     else:
         inputs = {
-            "trace_id":      trace_id,
-            "input_data":    user_input,
-            "task_args":     {},
-            "review_action": None,   # 이전 approve 상태가 다음 요청까지 잔류하는 문제 방지
+            "trace_id":        trace_id,
+            "input_data":      user_input,
+            "task_args":       {},
+            "review_action":   None,  # 이전 approve 상태 잔류 방지
+            "planner_context": "",    # 이전 플래너 검색 결과 오염 방지
+            "retry_count":     0,     # 이전 검색 재시도 카운트 잔류 방지
         }
         result = graph_app.invoke(inputs, config=config)
 
