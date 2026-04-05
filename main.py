@@ -433,16 +433,22 @@ async def chat_endpoint(request: Request):
         interrupt_data = iv.value if hasattr(iv, "value") else iv
         if not isinstance(interrupt_data, dict):
             interrupt_data = {}
-        # 구조 데이터(draft)를 함께 포함해 JS가 직접 렌더링 가능하도록 함
-        current_task = (result.get("current_task") or result.get("task_type") or "").strip()
+        # clarification interrupt: 이전 세션의 draft 상태가 잔류해도 내려보내지 않음
+        # human_review interrupt: draft 구조 데이터를 함께 포함해 JS가 직접 렌더링 가능하도록 함
+        interrupt_type_val = interrupt_data.get("type", "")
+        is_clarification   = (interrupt_type_val == "clarification")
+        current_task = (
+            "clarification" if is_clarification
+            else (result.get("current_task") or result.get("task_type") or "").strip()
+        )
         return JSONResponse({
             "type":           "interrupt",
-            "interrupt_type": interrupt_data.get("type", ""),
+            "interrupt_type": interrupt_type_val,
             "message":        interrupt_data.get("message", ""),
             "hint":           interrupt_data.get("hint", ""),
             "current_task":   current_task,
-            "draft_email":    result.get("draft_email"),
-            "draft_rfp":      result.get("draft_rfp") or "",
+            "draft_email":    None if is_clarification else result.get("draft_email"),
+            "draft_rfp":      "" if is_clarification else (result.get("draft_rfp") or ""),
             "sources":        [],
         })
 
