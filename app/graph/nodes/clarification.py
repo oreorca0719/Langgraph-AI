@@ -119,34 +119,6 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
                 "clarification_count": clarification_count + 1,
             }
 
-        # 슬롯 확인 후 요청 내용 정리해서 재확인 질문
-        _TASK_LABELS = {
-            "email_draft":  "이메일 초안 작성",
-            "rfp_draft":    "RFP 초안 작성",
-            "file_extract": "파일 분석",
-            "file_chat":    "파일 Q&A",
-        }
-        _SLOT_LABELS = {
-            "to":            f"수신자: {normalized_response}",
-            "subject":       f"내용: {normalized_response}",
-            "project_scope": f"범위: {normalized_response}",
-            "rfp_content":   f"요구사항: {normalized_response}",
-            "file_path":     f"파일: {normalized_response}",
-            "file_context":  f"파일: {normalized_response}",
-        }
-        # task_args의 routing_debug에서 원래 의도된 task 이름 가져오기
-        routing_debug = task_args.get("routing_debug") or {}
-        intended_task = routing_debug.get("original_task") or task_type
-        task_label = _TASK_LABELS.get(intended_task, "요청")
-        slot_label = _SLOT_LABELS.get(slot, normalized_response)
-        confirm_msg = (
-            f"요청하신 내용을 확인했습니다.\n\n"
-            f"**{task_label}**\n"
-            f"- {slot_label}\n\n"
-            f"진행할까요?"
-        )
-        interrupt({"type": "clarification", "message": confirm_msg})
-
         combined = f"{user_input} {normalized_response}".strip()
         new_task_args = {k: v for k, v in task_args.items() if k != "missing_slots"}
 
