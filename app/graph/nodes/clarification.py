@@ -42,17 +42,18 @@ _SLOT_QUESTIONS: dict[str, str] = {
 }
 
 
-def clarification_node(state: GraphState) -> Dict[str, Any]:
+def clarification_slot_node(state: GraphState) -> Dict[str, Any]:
     """
     라우팅 신뢰도가 낮을 때 사용자 의도를 확인하는 노드.
 
     흐름:
-    1. clarification_count >= 2 → 무한 루프 방어, knowledge_search 강제 fallback
-    2. LLM이 사내 기능 연관 여부 판단
+    1. clarification_count >= 3 → 무한 루프 방어, knowledge_search 강제 fallback
+    2. missing_slots 있으면 슬롯 질문 → 검증 → pending_confirm_msg 저장 후 clarification_confirm으로
+    3. missing_slots 없으면 LLM이 사내 기능 연관 여부 판단
        - 범위 외 → rejection_node로 직행
        - 연관 가능 → 의도 확인 질문 생성
-    3. interrupt()로 질문을 사용자에게 전달하고 응답 대기
-    4. 재개 후 original + 응답을 결합 → task_router_node 루프백
+    4. interrupt()로 질문을 사용자에게 전달하고 응답 대기
+    5. 재개 후 original + 응답을 결합 → task_router_node 루프백
     """
     print("--- [NODE] Clarification ---")
 
@@ -133,17 +134,44 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
         elif slot == "project_scope":
             new_task_args["project_scope"] = normalized_response
 
+        # 확인 메시지 생성 → clarification_confirm_node에서 사용
+        _TASK_LABELS = {
+            "email_draft":  "이메일 초안 작성",
+            "rfp_draft":    "RFP 초안 작성",
+            "file_extract": "파일 분석",
+            "file_chat":    "파일 Q&A",
+        }
+        _SLOT_LABELS = {
+            "to":            f"수신자: {normalized_response}",
+            "subject":       f"내용: {normalized_response}",
+            "project_scope": f"범위: {normalized_response}",
+            "rfp_content":   f"요구사항: {normalized_response}",
+            "file_path":     f"파일: {normalized_response}",
+            "file_context":  f"파일: {normalized_response}",
+        }
+        routing_debug = task_args.get("routing_debug") or {}
+        intended_task = routing_debug.get("original_task") or task_type
+        task_label = _TASK_LABELS.get(intended_task, "요청")
+        slot_label = _SLOT_LABELS.get(slot, normalized_response)
+        confirm_msg = (
+            f"요청하신 내용을 확인했습니다.\n\n"
+            f"**{task_label}**\n"
+            f"- {slot_label}\n\n"
+            f"진행할까요?"
+        )
+
         trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
                           data={"result": "slot_confirmed", "slot": slot,
                                 "combined_len": len(combined), "slot_value_len": len(normalized_response)})
         return {
             "input_data":          combined,
-            "task_type":           "",
+            "task_type":           "pending_confirm",
             "task_args":           new_task_args,
             "messages":            [HumanMessage(content=user_input),
                                     AIMessage(content=question_text)],
             "interrupt_type":      "",
             "clarification_count": clarification_count + 1,
+            "pending_confirm_msg": confirm_msg,
         }
 
     # ── 기존 LLM 기반 clarification (missing_slots 없음) ─────────────
@@ -203,11 +231,41 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
     }
 
 
+def clarification_confirm_node(state: GraphState) -> Dict[str, Any]:
+    """
+    슬롯 수집 완료 후 사용자에게 요청 내용을 확인하는 노드.
+    interrupt 1회만 사용 (DynamoDB 체크포인터 안정성 보장).
+    """
+    print("--- [NODE] Clarification Confirm ---")
+
+    trace_id = (state.get("trace_id") or "")
+    confirm_msg = (state.get("pending_confirm_msg") or "진행할까요?").strip()
+
+    trace_buffer.push(trace_id, node="clarification_confirm", event="enter", label="execute",
+                      data={"confirm_msg_len": len(confirm_msg)})
+
+    interrupt({
+        "type":    "clarification",
+        "message": confirm_msg,
+    })
+
+    trace_buffer.push(trace_id, node="clarification_confirm", event="exit", label="execute",
+                      data={"result": "confirmed"})
+
+    return {
+        "task_type":           "",
+        "pending_confirm_msg": "",
+        "interrupt_type":      "",
+    }
+
+
 def route_after_clarification(state: GraphState) -> str:
-    """clarification_node 이후 분기."""
+    """clarification_slot_node 이후 분기."""
     task = (state.get("task_type") or "").strip()
     if task == "rejection":
         return "rejection"
     if task == "knowledge_search":
         return "knowledge_search"  # 루프 방어 fallback 경로
+    if task == "pending_confirm":
+        return "clarification_confirm"  # 슬롯 수집 완료 → 확인 단계
     return "task_router"
