@@ -35,6 +35,9 @@ class GraphState(TypedDict, total=False):
     review_action: str          # "approve" | "revise" | "switch"
     current_task: str           # human_review switch 감지 기준
     interrupt_type: str         # "clarification" | "human_review"
+    pending_confirm_msg: str    # 슬롯 수집 후 확인 메시지 (clarification_confirm_node 용)
+    pending_switch_cmd: str     # 슬롯 수집 중 감지된 작업 전환 명령 (clarification_switch_confirm_node 용)
+    pending_switch_label: str   # 전환 확인 메시지용 현재 작업 레이블
 
     # ── Planner ──────────────────────────────────────────
     task_sequence: List[str]     # planner가 결정한 실행 순서

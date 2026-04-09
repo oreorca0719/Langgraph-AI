@@ -26,7 +26,10 @@ from app.core.config import has_gemini_api_key
 from app.graph.states.state import GraphState
 from app.graph.nodes.input_guard import input_guard_node
 from app.graph.nodes.task_router import task_router_node, route_by_task, rejection_node, route_after_input_guard
-from app.graph.nodes.clarification import clarification_node, route_after_clarification
+from app.graph.nodes.clarification import (
+    clarification_slot_node, clarification_confirm_node,
+    clarification_switch_confirm_node, route_after_clarification,
+)
 from app.graph.nodes.human_review import human_review_node, route_after_review
 from app.graph.nodes.knowledge_search import (
     search_node, quality_check_node, route_after_quality, rewrite_node, answer_node,
@@ -63,7 +66,9 @@ workflow = StateGraph(GraphState)
 # ── 노드 등록 ────────────────────────────────────────────────
 workflow.add_node("input_guard",   input_guard_node)
 workflow.add_node("task_router",   task_router_node)
-workflow.add_node("clarification", clarification_node)
+workflow.add_node("clarification",               clarification_slot_node)
+workflow.add_node("clarification_confirm",       clarification_confirm_node)
+workflow.add_node("clarification_switch_confirm", clarification_switch_confirm_node)
 workflow.add_node("rejection",     rejection_node)
 workflow.add_node("search",        search_node)
 workflow.add_node("quality_check", quality_check_node)
@@ -119,16 +124,21 @@ workflow.add_conditional_edges(
     },
 )
 
-# clarification → rejection or task_router or knowledge_search (루프 방어 fallback)
+# clarification_slot → rejection / task_router / knowledge_search / clarification_confirm
 workflow.add_conditional_edges(
     "clarification",
     route_after_clarification,
     {
-        "rejection":        "rejection",
-        "task_router":      "task_router",
-        "knowledge_search": "search",  # 루프 방어 fallback 경로
+        "rejection":             "rejection",
+        "task_router":           "task_router",
+        "knowledge_search":      "search",             # 루프 방어 fallback 경로
+        "clarification_confirm":        "clarification_confirm",        # 슬롯 수집 완료 → 확인 단계
+        "clarification_switch_confirm": "clarification_switch_confirm", # 작업 전환 감지 → 전환 확인
     },
 )
+# clarification_confirm / clarification_switch_confirm → task_router (고정)
+workflow.add_edge("clarification_confirm",       "task_router")
+workflow.add_edge("clarification_switch_confirm", "task_router")
 
 # knowledge search 순환: search → quality_check → (answer | rewrite → search)
 workflow.add_edge("search", "quality_check")
@@ -154,10 +164,11 @@ workflow.add_conditional_edges(
     "human_review",
     route_after_review,
     {
-        "end":        END,
-        "task_router": "task_router",
-        "email_draft": "email_draft",
-        "rfp_draft":   "rfp_draft",
+        "end":          END,
+        "task_router":  "task_router",
+        "email_draft":  "email_draft",
+        "rfp_draft":    "rfp_draft",
+        "human_review": "human_review",  # stay: 이탈 거부 시 draft 재표시
     },
 )
 
@@ -376,7 +387,7 @@ async def chat_endpoint(request: Request):
     }
 
     # ── interrupt 재개 여부 확인 ──────────────────────────────
-    _INTERRUPT_NODES = {"human_review", "clarification"}
+    _INTERRUPT_NODES = {"human_review", "clarification", "clarification_confirm", "clarification_switch_confirm"}
     has_interrupt = False
     try:
         current_state = graph_app.get_state(config)
@@ -394,9 +405,15 @@ async def chat_endpoint(request: Request):
         result = graph_app.invoke(Command(resume=user_input), config=config)
     else:
         inputs = {
-            "trace_id":   trace_id,
-            "input_data": user_input,
-            "task_args":  {},
+            "trace_id":            trace_id,
+            "input_data":          user_input,
+            "task_args":           {},
+            "review_action":       None,  # 이전 approve 상태 잔류 방지
+            "planner_context":     "",    # 이전 플래너 검색 결과 오염 방지
+            "retry_count":         0,     # 이전 검색 재시도 카운트 잔류 방지
+            "pending_confirm_msg":  "",    # 이전 슬롯 확인 메시지 잔류 방지
+            "pending_switch_cmd":   "",    # 이전 작업 전환 명령 잔류 방지
+            "pending_switch_label": "",    # 이전 작업 전환 레이블 잔류 방지
         }
         result = graph_app.invoke(inputs, config=config)
 
@@ -410,21 +427,60 @@ async def chat_endpoint(request: Request):
     except Exception:
         pending = []
 
+    # ── 폴백: tasks[].interrupts가 비어 있어도 state.next로 재감지 ──
+    if not pending and new_state and any(n in _INTERRUPT_NODES for n in (new_state.next or ())):
+        state_vals = new_state.values or {}
+        next_nodes = set(new_state.next or ())
+
+        if "human_review" in next_nodes:
+            # human_review interrupt: draft 포함 응답으로 재구성
+            hint = "수정이 필요하시면 내용을 말씀해 주세요. 완료하시려면 '완료' 또는 '확인'을 입력해 주세요."
+            pending = [type("_IV", (), {"value": {"type": "human_review", "message": "", "hint": hint}})()]
+        elif "clarification_switch_confirm" in next_nodes:
+            # 슬롯 수집 중 작업 전환 감지: 전환 확인 메시지 구성
+            task_label_fb = state_vals.get("pending_switch_label") or "현재"
+            msg = (
+                f"현재 {task_label_fb} 초안 작성 작업이 진행 중입니다.\n"
+                f"현재 작업에서 벗어나시겠습니까?"
+            )
+            pending = [type("_IV", (), {"value": {"type": "task_switch_confirm", "message": msg}})()]
+        elif "clarification_confirm" in next_nodes:
+            # 슬롯 수집 완료 후 확인 단계: pending_confirm_msg를 state에서 직접 읽음
+            msg = state_vals.get("pending_confirm_msg") or "진행할까요?"
+            pending = [type("_IV", (), {"value": {"type": "clarification", "message": msg}})()]
+        else:
+            # clarification_slot interrupt: missing_slots 기반 슬롯 질문
+            from app.graph.nodes.clarification import _SLOT_QUESTIONS
+            task_args  = state_vals.get("task_args") or {}
+            missing_slots: list = task_args.get("missing_slots") or []
+            if missing_slots:
+                slot = missing_slots[0]
+                msg  = _SLOT_QUESTIONS.get(slot, f"'{slot}' 정보를 알려주세요.")
+            else:
+                msg = state_vals.get("input_data") or ""
+            pending = [type("_IV", (), {"value": {"type": "clarification", "message": msg}})()]
+
     if pending:
         iv = pending[0]
         interrupt_data = iv.value if hasattr(iv, "value") else iv
         if not isinstance(interrupt_data, dict):
             interrupt_data = {}
-        # 구조 데이터(draft)를 함께 포함해 JS가 직접 렌더링 가능하도록 함
-        current_task = (result.get("current_task") or result.get("task_type") or "").strip()
+        # clarification/task_switch_confirm: 이전 세션 draft 노출 차단
+        # human_review: draft 구조 데이터 포함
+        interrupt_type_val = interrupt_data.get("type", "")
+        is_clarification   = interrupt_type_val in ("clarification", "task_switch_confirm")
+        current_task = (
+            interrupt_type_val if is_clarification
+            else (result.get("current_task") or result.get("task_type") or "").strip()
+        )
         return JSONResponse({
             "type":           "interrupt",
-            "interrupt_type": interrupt_data.get("type", ""),
+            "interrupt_type": interrupt_type_val,
             "message":        interrupt_data.get("message", ""),
             "hint":           interrupt_data.get("hint", ""),
             "current_task":   current_task,
-            "draft_email":    result.get("draft_email"),
-            "draft_rfp":      result.get("draft_rfp") or "",
+            "draft_email":    None if is_clarification else result.get("draft_email"),
+            "draft_rfp":      "" if is_clarification else (result.get("draft_rfp") or ""),
             "sources":        [],
         })
 
@@ -438,6 +494,16 @@ async def chat_endpoint(request: Request):
 
     # ── 응답 포맷팅 ───────────────────────────────────────────
     task_type = (result.get("task_type") or "").strip()
+
+    # 승인 완료: draft가 초기화되었으면 완료 메시지 반환
+    if (result.get("review_action") == "approve"
+            and not result.get("draft_email")
+            and not result.get("draft_rfp")):
+        return {
+            "type": "chat",
+            "answer": "확인되었습니다. 작업이 완료되었습니다.",
+            "sources": [],
+        }
 
     if task_type == "file_extract":
         text = (result.get("extracted_text") or "")[:20000]

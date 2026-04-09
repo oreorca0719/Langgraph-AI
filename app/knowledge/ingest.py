@@ -288,3 +288,11 @@ def auto_ingest_if_enabled() -> None:
 
     _save_state(knowledge_dir, state)
     print(f"[INGEST] 완료 - 신규:{added} 갱신:{updated} 스킵:{skipped} 삭제:{deleted}")
+
+    if added + updated + deleted > 0:
+        try:
+            from app.graph.nodes.knowledge_search import invalidate_bm25_cache
+            invalidate_bm25_cache()
+            print("[INGEST] BM25 캐시 무효화 완료")
+        except Exception as e:
+            print(f"[INGEST] BM25 캐시 무효화 실패 (non-fatal): {e}")

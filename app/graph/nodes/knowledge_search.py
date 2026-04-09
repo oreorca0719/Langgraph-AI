@@ -14,9 +14,7 @@ from app.core.config import (
     RETRIEVAL_MIN_RELEVANCE, RETRIEVAL_MAX_DISTANCE, RETRIEVAL_TOP_K,
 )
 from app.core.history_utils import (
-    HISTORY_MAX_MESSAGES,
     extract_text_content,
-    filter_history_by_relevance as _filter_history_by_relevance,
 )
 from app.graph.states.state import GraphState
 from app.security.content_sanitizer import sanitize_docs
@@ -38,6 +36,14 @@ _MAX_RETRY = 2
 
 # 하이브리드 검색에서 시맨틱 후보 배수 (RRF 풀 크기)
 _HYBRID_FETCH_MULTIPLIER = 4
+
+
+def invalidate_bm25_cache() -> None:
+    """문서 재인제스트 후 BM25 인덱스를 초기화합니다."""
+    global _bm25_index, _bm25_docs
+    with _bm25_lock:
+        _bm25_index = None
+        _bm25_docs = []
 
 
 def _get_chroma() -> Chroma:
@@ -242,8 +248,6 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
 
     trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
-    raw_history = list(state.get("messages") or [])[-HISTORY_MAX_MESSAGES:]
-    chat_history = _filter_history_by_relevance(raw_history, user_input)
     task_args = state.get("task_args") or {}
     docs: List[Document] = task_args.get("search_docs") or []
 
@@ -269,7 +273,6 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
         )
         messages = (
             [SystemMessage(content=system_content)]
-            + chat_history
             + [HumanMessage(content=user_input)]
         )
         response = get_llm().invoke(messages)
@@ -285,9 +288,20 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
     trace_buffer.push(trace_id, node="answer", event="exit", label="execute",
                       data={"response_len": len(str(final_message.content))})
 
+    citations_used = []
+    for i, doc in enumerate(docs, start=1):
+        md = getattr(doc, "metadata", {}) or {}
+        raw_path = md.get("display_source") or md.get("path") or ""
+        citations_used.append({
+            "id": i,
+            "title": md.get("title") or md.get("file_name") or f"문서 {i}",
+            "snippet": (doc.page_content or "")[:200],
+            "path": raw_path,
+        })
+
     return {
         "messages": [HumanMessage(content=user_input), final_message],
-        "citations_used": [],
+        "citations_used": citations_used,
         "retry_count": 0,
-        "clarification_count": 0,  # 정상 경로 진입 시 루프 카운터 리셋
+        "clarification_count": 0,
     }
