@@ -101,13 +101,18 @@ def _max_similarity(query_vec: List[float]) -> float:
     return max(_cosine(query_vec, ref) for ref in refs)
 
 
-def check(user_input: str, recent_user_turns: List[str] | None = None) -> bool:
+def check(
+    user_input: str,
+    recent_user_turns: List[str] | None = None,
+    input_embedding: List[float] | None = None
+) -> bool:
     """
     현재 입력과 최근 N턴을 기반으로 인젝션 여부 반환.
 
     Args:
         user_input: 현재 사용자 입력
         recent_user_turns: 이전 HumanMessage content 리스트 (최근 순)
+        input_embedding: 이미 계산된 user_input 임베딩 (input_guard에서 전달)
 
     Returns:
         True  → 인젝션 의심, 차단
@@ -117,11 +122,14 @@ def check(user_input: str, recent_user_turns: List[str] | None = None) -> bool:
         return False
 
     try:
-        from app.core.config import get_embeddings
-        emb = get_embeddings()
+        # ✅ 캐시된 임베딩 사용, 없으면 계산
+        if input_embedding:
+            single_vec = input_embedding
+        else:
+            from app.core.config import get_embeddings
+            emb = get_embeddings()
+            single_vec = emb.embed_query(user_input)
 
-        # 단일 메시지 검사
-        single_vec = emb.embed_query(user_input)
         single_score = _max_similarity(single_vec)
         if single_score >= INJECTION_THRESHOLD_SINGLE:
             print(f"[INJECTION] 단일 감지: score={single_score:.4f}")
@@ -131,6 +139,10 @@ def check(user_input: str, recent_user_turns: List[str] | None = None) -> bool:
         if recent_user_turns:
             window = recent_user_turns[-INJECTION_WINDOW_TURNS:]
             combined = " ".join(window + [user_input])
+
+            # ✅ combined는 새로운 텍스트이므로 새 임베딩 필요
+            from app.core.config import get_embeddings
+            emb = get_embeddings()
             combined_vec = emb.embed_query(combined)
             combined_score = _max_similarity(combined_vec)
             if combined_score >= INJECTION_THRESHOLD_COMBINED:

@@ -6,7 +6,6 @@ from typing import Any, Dict
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import interrupt
 
-from app.core import trace_buffer
 from app.graph.states.state import GraphState
 from app.graph.nodes.task_router import _semantic_route, _contains_any
 
@@ -62,67 +61,3 @@ def human_review_node(state: GraphState) -> Dict[str, Any]:
     current_task = (state.get("current_task") or "").strip()
     draft_preview = _format_draft_preview(state)
 
-    trace_buffer.push(trace_id, node="human_review", event="enter", label="execute",
-                      data={"current_task": current_task})
-
-    # interrupt: 초안 전달 및 사용자 응답 대기
-    user_response = interrupt({
-        "type": "human_review",
-        "message": draft_preview,
-        "hint": "수정이 필요하시면 내용을 말씀해 주세요. 완료하시려면 '완료' 또는 '확인'을 입력해 주세요.",
-    })
-
-    user_response_str = (user_response or "").strip()
-    trace_buffer.push(trace_id, node="human_review", event="call", label="execute",
-                      data={"response": user_response_str[:100]})
-
-    # 1) 승인 판단 (키워드)
-    if _contains_any(user_response_str, _APPROVE_HINTS):
-        trace_buffer.push(trace_id, node="human_review", event="exit", label="execute",
-                          data={"action": "approve"})
-        return {
-            "review_action": "approve",
-            "input_data": user_response_str,
-            "messages": [HumanMessage(content=user_response_str)],
-        }
-
-    # 2) switch 판단: 수정 키워드가 없을 때만 semantic routing으로 task 전환 감지
-    # 수정 힌트가 있는 경우 현재 초안 수정 요청으로 간주 (switch 건너뜀)
-    if not _contains_any(user_response_str, _REVISE_HINTS):
-        try:
-            routed, _, _ = _semantic_route(user_response_str)
-            if routed not in ("unknown", current_task) and routed != "":
-                trace_buffer.push(trace_id, node="human_review", event="exit", label="execute",
-                                  data={"action": "switch", "new_task": routed})
-                return {
-                    "review_action": "switch",
-                    "input_data": user_response_str,
-                    "task_type": "",   # task_router가 재분류
-                    "messages": [HumanMessage(content=user_response_str)],
-                }
-        except Exception:
-            pass
-
-    # 3) 수정 요청 (기본)
-    trace_buffer.push(trace_id, node="human_review", event="exit", label="execute",
-                      data={"action": "revise"})
-    return {
-        "review_action": "revise",
-        "input_data": user_response_str,
-        "messages": [HumanMessage(content=user_response_str)],
-    }
-
-
-def route_after_review(state: GraphState) -> str:
-    """human_review_node 이후 분기."""
-    action = (state.get("review_action") or "").strip()
-    current_task = (state.get("current_task") or "").strip()
-
-    if action == "approve":
-        return "end"
-    if action == "switch":
-        return "task_router"
-    # revise: 현재 task로 루프백
-    if current_task in ("email_draft", "rfp_draft"):
-        return current_task
-    return "end"

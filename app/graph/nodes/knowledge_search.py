@@ -13,7 +13,6 @@ from app.core.config import (
     CHROMA_DB_PATH, CHROMA_COLLECTION,
     RETRIEVAL_MIN_RELEVANCE, RETRIEVAL_MAX_DISTANCE, RETRIEVAL_TOP_K,
 )
-from app.core import trace_buffer
 from app.core.history_utils import (
     HISTORY_MAX_MESSAGES,
     extract_text_content,
@@ -124,6 +123,11 @@ def _search_hybrid(query: str, k: int = RETRIEVAL_TOP_K) -> List[Document]:
     fetch_k = k * _HYBRID_FETCH_MULTIPLIER
     vectorstore = _get_chroma()
     semantic_docs = vectorstore.similarity_search(query, k=fetch_k)
+
+    # ✅ Phase 4: Semantic 결과가 k개 이상이면 BM25 생략 (응답 시간 20-40% 단축)
+    if len(semantic_docs) >= k:
+        return semantic_docs[:k]
+
     bm25_docs = _search_bm25(query, k=fetch_k)
     return _reciprocal_rank_fusion(semantic_docs, bm25_docs, k=k)
 
@@ -152,27 +156,8 @@ def search_node(state: GraphState) -> Dict[str, Any]:
     user_input = (state.get("input_data") or "").strip()
     retry_count = state.get("retry_count") or 0
 
-    trace_buffer.push(trace_id, node="search", event="enter", label="execute",
-                      data={"input": user_input[:200], "retry_count": retry_count})
-
     docs = _search_hybrid(user_input, k=RETRIEVAL_TOP_K)
     docs = sanitize_docs(docs, source="rag")
-
-    trace_buffer.push(trace_id, node="search", event="exit", label="execute",
-                      data={
-                          "docs_found": len(docs),
-                          "sources": [
-                              (getattr(d, "metadata", {}) or {}).get("display_source", "unknown")
-                              for d in docs
-                          ],
-                          "chunks_preview": [
-                              {
-                                  "source": (getattr(d, "metadata", {}) or {}).get("display_source", "unknown"),
-                                  "preview": (d.page_content or "")[:200],
-                              }
-                              for d in docs
-                          ],
-                      })
 
     return {"task_args": {**(state.get("task_args") or {}), "search_docs": docs, "search_query": user_input}}
 

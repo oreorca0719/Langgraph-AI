@@ -53,7 +53,11 @@ def cosine(a: List[float], b: List[float]) -> float:
     return dot / (math.sqrt(na) * math.sqrt(nb))
 
 
-def filter_history_by_relevance(history: List, user_input: str) -> List:
+def filter_history_by_relevance(
+    history: List,
+    user_input: str,
+    input_embedding: List[float] | None = None  # ← 추가: 캐시된 임베딩
+) -> List:
     if not history or not user_input.strip():
         return history
 
@@ -81,10 +85,18 @@ def filter_history_by_relevance(history: List, user_input: str) -> List:
 
     try:
         from app.core.config import get_embeddings
-        embeddings  = get_embeddings()
-        query_vec   = embeddings.embed_query(user_input)
+
+        # ✅ 캐시된 임베딩 사용, 없으면 계산
+        if input_embedding:
+            query_vec = input_embedding
+        else:
+            embeddings = get_embeddings()
+            query_vec = embeddings.embed_query(user_input)
+
+        # 히스토리 임베딩은 배치 (필수)
+        embeddings = get_embeddings()
         human_texts = [(p[0].content or "") for p in candidates]
-        msg_vecs    = embeddings.embed_documents(human_texts)
+        msg_vecs = embeddings.embed_documents(human_texts)
 
         kept = [
             pair for pair, vec in zip(candidates, msg_vecs)

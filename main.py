@@ -8,9 +8,6 @@ from dotenv import load_dotenv
 load_dotenv()
 from contextlib import asynccontextmanager
 
-from app.core import log_buffer as _log_buffer
-_log_buffer.setup()
-
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -53,7 +50,6 @@ from app.auth.dynamo import ensure_admin_user, ensure_users_table_if_enabled
 from app.auth.routes import router as auth_router, set_templates, set_graph_app
 from app.auth.security import hash_password
 from app.auth.routing_log import ensure_routing_log_table, save_routing_log
-from app.core import trace_buffer as _trace_buffer
 from app.auth.intent_samples import ensure_intent_samples_table, seed_intent_samples
 
 
@@ -710,18 +706,6 @@ async def chat_with_file(
         print(f"[CHAT-WITH-FILE] file_context State 저장 실패 (non-fatal): {e}")
 
     return JSONResponse({"type": "file_qa", "answer": answer, "sources": []})
-
-
-@app.get("/admin/api/traces")
-def admin_traces_api(request: Request):
-    user = get_current_user(request)
-    require_admin_user(user)
-    from datetime import datetime
-    traces = _trace_buffer.get_recent_traces(50)
-    for trace in traces:
-        ts = trace.get("ts_start", 0)
-        trace["ts_str"] = datetime.fromtimestamp(ts).strftime("%m-%d %H:%M:%S") if ts else ""
-    return traces
 
 
 @app.get("/favicon.ico")

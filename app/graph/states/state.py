@@ -9,6 +9,7 @@ from langchain_core.messages import BaseMessage
 class GraphState(TypedDict, total=False):
     # ── 기본 입출력 ──────────────────────────────────────────
     input_data: str
+    input_embedding: List[float]       # ← 임베딩 캐시: 사용자 입력 벡터화 결과
     task_type: str
     task_args: Dict[str, Any]
     messages: Annotated[Sequence[BaseMessage], add]

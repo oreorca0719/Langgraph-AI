@@ -8,7 +8,6 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import interrupt
 
 from app.core.config import get_llm
-from app.core import trace_buffer
 from app.core.history_utils import extract_text_content
 from app.graph.states.state import GraphState
 
@@ -57,94 +56,6 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
     task_args = state.get("task_args") or {}
     missing_slots: list[str] = task_args.get("missing_slots") or []
 
-    trace_buffer.push(trace_id, node="clarification", event="enter", label="execute",
-                      data={"input": user_input[:200], "count": clarification_count, "missing_slots": missing_slots})
-
-    # 루프 방어: 2회 이상 발동 시 강제 knowledge_search fallback
-    if clarification_count >= 2:
-        trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
-                          data={"result": "loop_fallback"})
-        old_args = state.get("task_args") or {}
-        clean_args = {k: v for k, v in old_args.items() if k != "missing_slots"}
-        clean_args["routing_debug"] = {"final_source": "clarification_loop_fallback"}
-        return {
-            "task_type": "knowledge_search",
-            "clarification_count": 0,
-            "task_args": clean_args,
-        }
-
-    # ── Priority 3: 슬롯 기반 clarification (LLM 우회) ───────────────
-    if missing_slots:
-        slot = missing_slots[0]
-        question_text = _SLOT_QUESTIONS.get(
-            slot,
-            f"'{slot}' 정보를 추가로 알려주세요."
-        )
-
-        trace_buffer.push(trace_id, node="clarification", event="call", label="execute",
-                          data={"mode": "slot_question", "slot": slot})
-
-        user_response = interrupt({
-            "type":    "clarification",
-            "message": question_text,
-        })
-
-        normalized_response = user_response.strip()
-
-        if slot in {"file_path", "file_context"} and not _looks_like_file_reference(normalized_response):
-            retry_args = {**task_args, "missing_slots": [slot]}
-            trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
-                              data={"result": "slot_retry_invalid", "slot": slot,
-                                    "slot_value_len": len(normalized_response)})
-            return {
-                "input_data": user_input,
-                "task_type": "",
-                "task_args": retry_args,
-                "messages": [HumanMessage(content=user_input), AIMessage(content=question_text)],
-                "interrupt_type": "",
-                "clarification_count": clarification_count + 1,
-            }
-
-        combined = f"{user_input} {user_response}".strip()
-        new_task_args = {k: v for k, v in task_args.items() if k != "missing_slots"}
-
-        if slot == "to":
-            new_task_args["to"] = normalized_response
-        elif slot in {"file_path", "file_context"}:
-            new_task_args["file_path"] = normalized_response
-        elif slot == "project_scope":
-            new_task_args["project_scope"] = normalized_response
-
-        trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
-                          data={"result": "slot_resumed", "slot": slot,
-                                "combined_len": len(combined), "slot_value_len": len(normalized_response)})
-        return {
-            "input_data":          combined,
-            "task_type":           "",
-            "task_args":           new_task_args,
-            "messages":            [HumanMessage(content=user_input),
-                                    AIMessage(content=question_text)],
-            "interrupt_type":      "",
-            "clarification_count": clarification_count + 1,
-        }
-
-    # ── 기존 LLM 기반 clarification (missing_slots 없음) ─────────────
-    system_content = (
-        "당신은 사내 AI 어시스턴트입니다. 사용자의 요청 의도가 불분명합니다.\n\n"
-        "이 시스템이 제공하는 기능:\n"
-        "① 사내 문서·정보 검색\n"
-        "② 이메일 초안 작성\n"
-        "③ RFP 초안 작성\n"
-        "④ 파일 분석\n"
-        "⑤ AI 기능 안내\n\n"
-        "아래 두 가지 중 하나로만 응답하세요.\n\n"
-        "A) 요청이 위 기능 중 하나와 연관될 가능성이 있으면:\n"
-        "   어떤 작업을 원하시는지 1문장으로 질문하세요.\n\n"
-        "B) 요청이 위 기능과 전혀 무관하면:\n"
-        "   정확히 이 문장만 출력: "
-        "'해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다.'\n\n"
-        "A 또는 B 중 하나만 출력하고 다른 내용은 추가하지 마세요."
-    )
 
     response = get_llm().invoke([
         SystemMessage(content=system_content),
@@ -153,43 +64,3 @@ def clarification_node(state: GraphState) -> Dict[str, Any]:
     response_text = extract_text_content(response.content)
     is_rejection = "지원 범위에 포함되지 않아" in response_text
 
-    trace_buffer.push(trace_id, node="clarification", event="call", label="execute",
-                      data={"is_rejection": is_rejection})
-
-    if is_rejection:
-        trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
-                          data={"result": "rejection"})
-        return {
-            "task_type": "rejection",
-            "messages": [HumanMessage(content=user_input), AIMessage(content=response_text)],
-        }
-
-    # interrupt: 질문을 프론트엔드에 전달하고 사용자 응답 대기
-    user_response = interrupt({
-        "type": "clarification",
-        "message": response_text,
-    })
-
-    # 재개: original + 응답 결합 후 task_router로 루프백
-    combined = f"{user_input} {user_response}".strip()
-    trace_buffer.push(trace_id, node="clarification", event="exit", label="execute",
-                      data={"result": "resumed", "combined_len": len(combined)})
-
-    return {
-        "input_data": combined,
-        "task_type": "",          # task_router가 재분류
-        "task_args": task_args,   # 기존 task_args 보존 (라우팅 컨텍스트 유지)
-        "messages": [HumanMessage(content=user_input), AIMessage(content=response_text)],
-        "interrupt_type": "",
-        "clarification_count": clarification_count + 1,
-    }
-
-
-def route_after_clarification(state: GraphState) -> str:
-    """clarification_node 이후 분기."""
-    task = (state.get("task_type") or "").strip()
-    if task == "rejection":
-        return "rejection"
-    if task == "knowledge_search":
-        return "knowledge_search"  # 루프 방어 fallback 경로
-    return "task_router"

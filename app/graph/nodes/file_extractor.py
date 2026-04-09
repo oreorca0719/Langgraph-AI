@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from app.core import trace_buffer
 from app.graph.states.state import GraphState
 
 
@@ -108,39 +107,3 @@ def file_extractor_node(state: GraphState) -> GraphState:
     args = state.get("task_args") or {}
     file_path = (args.get("file_path") or "").strip()
 
-    trace_buffer.push(trace_id, node="file_extractor", event="enter", label="execute",
-                      data={"file_path": file_path})
-
-    if not file_path:
-        trace_buffer.push(trace_id, node="file_extractor", event="exit", label="execute",
-                          data={"ok": False, "error": "file_path 없음"})
-        return {
-            **state,
-            "extracted_text": "",
-            "extracted_meta": {"ok": False, "error": "file_path가 비어 있습니다.", "missing_fields": ["file_path"]},
-        }
-
-    p = Path(file_path)
-    if not p.exists() or not p.is_file():
-        trace_buffer.push(trace_id, node="file_extractor", event="exit", label="execute",
-                          data={"ok": False, "error": f"파일 없음: {file_path}"})
-        return {
-            **state,
-            "extracted_text": "",
-            "extracted_meta": {"ok": False, "error": f"파일이 존재하지 않습니다: {file_path}"},
-        }
-
-    try:
-        text, meta = extract_text_from_file(p)
-        meta["ok"] = True
-        trace_buffer.push(trace_id, node="file_extractor", event="exit", label="execute",
-                          data={"ok": True, "suffix": meta.get("suffix", ""), "size_bytes": meta.get("size_bytes", 0)})
-        return {**state, "extracted_text": text, "extracted_meta": meta, "clarification_count": 0}
-    except Exception as e:
-        trace_buffer.push(trace_id, node="file_extractor", event="exit", label="execute",
-                          data={"ok": False, "error": str(e)})
-        return {
-            **state,
-            "extracted_text": "",
-            "extracted_meta": {"ok": False, "error": str(e), "path": file_path},
-        }

@@ -8,7 +8,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app.core.config import get_embeddings, ROUTER_TOP1_MIN, ROUTER_MARGIN_MIN
 from app.core.config import EMAIL_DRAFT_HIGH_CONF_THRESHOLD
-from app.core import trace_buffer
 from app.core.history_utils import cosine as _cosine
 from app.graph.states.state import GraphState
 from app.graph.nodes.llm_intent_fallback import llm_intent_fallback
@@ -126,45 +125,58 @@ def _load_sample_vectors() -> Dict[str, List[List[float]]]:
         return _SAMPLE_VECTORS
 
 
-def _rule_based_route(user_input: str) -> str:
+def _quick_route(user_input: str) -> str:
+    """
+    Rule-based 빠른 라우팅 (Phase 3: 단순화).
+    명확한 힌트가 있을 때만 확정 반환, 아니면 "unknown".
+    """
+    # 1. 이메일 편집 (우선도 최고: 기존 초안 수정)
     if _contains_any(user_input, _EMAIL_EDIT_HINTS):
         return "email_draft"
-    if _has_email_struct(user_input) or _contains_any(user_input, ["이메일", "메일", "email"]):
+
+    # 2. 이메일 구조 감지 (to:/subject: 등 명시적 구조)
+    if _has_email_struct(user_input):
         return "email_draft"
+
+    # 3. 이메일 키워드 + 작성 힌트 (둘 다 있어야 확정)
+    if (
+        _contains_any(user_input, ["이메일", "메일", "email"])
+        and _contains_any(user_input, _EMAIL_WRITE_HINTS)
+    ):
+        return "email_draft"
+
+    # 4. RFP 명시적 키워드
     if _contains_any(user_input, ["rfp", "제안요청서", "요구사항", "요구사항 정의서"]):
         return "rfp_draft"
-    has_extract_intent = _contains_any(user_input, ["추출", "텍스트 추출", "내용 추출", "파싱", "읽어줘", "extract"])
-    if has_extract_intent and _has_file_path_hint(user_input):
+
+    # 5. RFP 범위 힌트 (프로젝트, 구축 등)
+    if _has_rfp_scope_hint(user_input):
+        return "rfp_draft"
+
+    # 6. 파일 추출 (파일 경로 + 추출 힌트 동시 존재)
+    if _has_file_path_hint(user_input) and _contains_any(user_input, _FILE_EXTRACT_HINTS):
         return "file_extract"
-    return "knowledge_search"
+
+    # 명확하지 않음 → semantic으로 넘김
+    return "unknown"
 
 
-def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
-    if _contains_any(user_input, _EMAIL_EDIT_HINTS):
-        debug = {
-            "mode": "semantic", "top1_task": "email_draft", "top1_score": 1.0,
-            "top2_score": 0.0, "margin": 1.0, "decision": "email_draft",
-            "reason": "email_edit_hint", "ranked": [{"task": "email_draft", "score": 1.0}],
-        }
-        return "email_draft", debug, []
-
-    if (
-        _has_email_struct(user_input)
-        or (
-            _contains_any(user_input, ["이메일", "메일", "email"])
-            and _contains_any(user_input, _EMAIL_WRITE_HINTS)
-        )
-    ):
-        debug = {
-            "mode": "semantic", "top1_task": "email_draft", "top1_score": 1.0,
-            "top2_score": 0.0, "margin": 1.0, "decision": "email_draft",
-            "reason": "email_write_hint", "ranked": [{"task": "email_draft", "score": 1.0}],
-        }
-        return "email_draft", debug, []
-
+def _semantic_route(
+    user_input: str,
+    input_embedding: List[float] | None = None
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Semantic 라우팅 (Phase 3: 단순화).
+    _quick_route()에서 "unknown"인 경우만 실행.
+    """
     vectors = _load_sample_vectors()
     embeddings = get_embeddings()
-    query_vec = embeddings.embed_query(user_input)
+
+    # Phase 2: 캐시 임베딩 사용
+    if input_embedding:
+        query_vec = input_embedding
+    else:
+        query_vec = embeddings.embed_query(user_input)
 
     ranked: List[Tuple[str, float]] = []
     for task, task_vectors in vectors.items():
@@ -174,7 +186,7 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
         ranked.append((task, score))
 
     if not ranked:
-        return "unknown", {"reason": "no_samples"}, []
+        return "unknown", {"mode": "semantic", "reason": "no_samples", "decision": "unknown"}
 
     ranked.sort(key=lambda x: x[1], reverse=True)
     top1_task, top1_score = ranked[0]
@@ -188,6 +200,7 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
     if top1_score < top1_min or margin < margin_min:
         decision = "unknown"
 
+    # email_draft 신뢰도 재검증 (semantic 결과가 email_draft일 때만)
     if decision == "email_draft":
         hint_present = (
             _has_email_struct(user_input)
@@ -197,6 +210,7 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
         if not hint_present and top1_score <= EMAIL_DRAFT_HIGH_CONF_THRESHOLD:
             decision = "unknown"
 
+    # file_extract 신뢰도 재검증 (semantic 결과가 file_extract일 때만)
     if decision == "file_extract":
         if not (_has_file_path_hint(user_input) and _contains_any(user_input, _FILE_EXTRACT_HINTS)):
             decision = "unknown"
@@ -212,7 +226,7 @@ def _semantic_route(user_input: str) -> Tuple[str, Dict[str, Any], List[float]]:
         "threshold_margin": margin_min,
         "ranked": [{"task": t, "score": round(s, 4)} for t, s in ranked[:4]],
     }
-    return decision, debug, query_vec
+    return decision, debug
 
 
 def task_router_node(state: GraphState) -> GraphState:
@@ -221,32 +235,35 @@ def task_router_node(state: GraphState) -> GraphState:
     trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
     task_args = state.get("task_args") or {}
-
-    trace_buffer.push(trace_id, node="task_router", event="enter", label="execute",
-                      data={"input": user_input[:200]})
+    input_embedding = state.get("input_embedding")  # Phase 2: 캐시 임베딩
 
     if not user_input:
-        trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
-                          data={"task_type": "knowledge_search", "mode": "empty_input"})
         return {"task_type": "knowledge_search", "task_args": task_args}
 
     try:
-        routed, debug, query_vec = _semantic_route(user_input)
+        # Step 1: Rule-based 빠른 라우팅
+        routed = _quick_route(user_input)
+        debug: Dict[str, Any] = {"mode": "rule_based", "final_source": "quick_route", "decision": routed}
 
+        # Step 2: Semantic (quick_route 결과가 unknown이면만)
         if routed == "unknown":
-            llm_task, llm_debug = llm_intent_fallback(user_input)
-            debug["llm_fallback"] = llm_debug
-            if llm_task != "unknown":
-                routed = llm_task
-                debug["decision"] = llm_task
-                debug["final_source"] = "llm_fallback"
-                added = add_sample(llm_task, user_input, source="llm_fallback")
-                if added:
-                    invalidate_sample_cache()
+            routed, debug = _semantic_route(user_input, input_embedding)
+
+            # LLM Fallback (semantic도 unknown이면)
+            if routed == "unknown":
+                llm_task, llm_debug = llm_intent_fallback(user_input)
+                debug["llm_fallback"] = llm_debug
+                if llm_task != "unknown":
+                    routed = llm_task
+                    debug["decision"] = llm_task
+                    debug["final_source"] = "llm_fallback"
+                    added = add_sample(llm_task, user_input, source="llm_fallback")
+                    if added:
+                        invalidate_sample_cache()
+                else:
+                    debug["final_source"] = "unknown"
             else:
-                debug["final_source"] = "unknown"
-        else:
-            debug["final_source"] = "semantic"
+                debug["final_source"] = "semantic"
 
         # 복합 요청 감지: 검색 + 작성 패턴이 동시 존재 (injection/file 계열 제외)
         if routed not in ("injection", "file_chat", "file_extract") and _is_compound_request(user_input):
@@ -330,18 +347,12 @@ def task_router_node(state: GraphState) -> GraphState:
         if missing_slots:
             merged_args["missing_slots"] = missing_slots
 
-        trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
-                          data={
-                              "task_type": routed,
-                              "mode": debug.get("mode", ""),
-                              "final_source": debug.get("final_source", ""),
-                              "top1_score": debug.get("top1_score", ""),
-                              "margin": debug.get("margin", ""),
-                          })
         return {"task_type": routed, "task_args": merged_args}
 
     except Exception as e:
-        fallback = _rule_based_route(user_input)
+        fallback = _quick_route(user_input)
+        if fallback == "unknown":
+            fallback = "knowledge_search"
         merged_args = {
             **task_args,
             "routing_debug": {
@@ -349,8 +360,6 @@ def task_router_node(state: GraphState) -> GraphState:
                 "final_source": "rule_fallback", "reason": str(e),
             },
         }
-        trace_buffer.push(trace_id, node="task_router", event="exit", label="execute",
-                          data={"task_type": fallback, "mode": "rule_fallback", "error": str(e)})
         return {"task_type": fallback, "task_args": merged_args}
 
 
@@ -358,8 +367,6 @@ def rejection_node(state: GraphState) -> Dict[str, Any]:
     print("--- [NODE] Rejection ---")
     user_input = (state.get("input_data") or "").strip()
     trace_id = (state.get("trace_id") or "")
-    trace_buffer.push(trace_id, node="rejection", event="exit", label="execute",
-                      data={"input": user_input[:200]})
     return {
         **state,
         "messages": [

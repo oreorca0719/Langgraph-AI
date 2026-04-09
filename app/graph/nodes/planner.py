@@ -6,7 +6,6 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.output_parsers import JsonOutputParser
 
 from app.core.config import get_llm
-from app.core import trace_buffer
 from app.graph.states.state import GraphState
 
 
@@ -72,48 +71,3 @@ def planner_node(state: GraphState) -> Dict[str, Any]:
     trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
 
-    trace_buffer.push(trace_id, node="planner", event="enter", label="execute",
-                      data={"input": user_input[:200]})
-
-    # 1. task 순서 결정
-    task_sequence = _plan_tasks(user_input, trace_id)
-
-    trace_buffer.push(trace_id, node="planner", event="call", label="plan",
-                      data={"task_sequence": task_sequence})
-
-    # 2. 선행 task(검색) 직접 실행 → context 누적
-    context_parts: List[str] = []
-    final_task = task_sequence[-1] if task_sequence else "knowledge_search"
-    pre_tasks = task_sequence[:-1]
-
-    for task in pre_tasks:
-        if task == "knowledge_search":
-            search_result = _execute_knowledge_search(user_input)
-            if search_result:
-                context_parts.append(f"[사내 문서 검색 결과]\n{search_result}")
-
-    planner_context = "\n\n".join(context_parts)
-
-    trace_buffer.push(trace_id, node="planner", event="exit", label="execute",
-                      data={"final_task": final_task, "context_len": len(planner_context)})
-
-    return {
-        "task_sequence": task_sequence,
-        "planner_context": planner_context,
-        "task_type": final_task,
-        "clarification_count": 0,
-    }
-
-
-def route_after_planner(state: GraphState) -> str:
-    """planner_node 이후 최종 task 노드로 라우팅."""
-    task = (state.get("task_type") or "knowledge_search").strip()
-    _MAP = {
-        "knowledge_search": "knowledge_search",
-        "rfp_draft":        "rfp_draft",
-        "email_draft":      "email_draft",
-        "ai_guide":         "ai_guide",
-        "detail_search":    "detail_search",
-        "file_chat":        "file_chat",
-    }
-    return _MAP.get(task, "knowledge_search")

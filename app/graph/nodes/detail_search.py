@@ -6,7 +6,6 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from app.core.config import get_llm, RETRIEVAL_TOP_K
-from app.core import trace_buffer
 from app.core.history_utils import extract_text_content
 from app.graph.nodes.knowledge_search import _get_chroma, _search_hybrid
 from app.graph.states.state import GraphState
@@ -96,29 +95,3 @@ def detail_search_node(state: GraphState) -> Dict[str, Any]:
             prev_human = str(msg.content)
             break
 
-    trace_buffer.push(trace_id, node="detail_search", event="enter", label="execute",
-                      data={"input": user_input[:200], "prev_human": prev_human[:100]})
-
-    # 쿼리 재구성 + 참조 문서 추출
-    reconstructed_query, source_name = _reconstruct_query(prev_human, prev_ai, user_input)
-
-    # 상세 검색
-    docs = _search_with_filter(reconstructed_query, source_name)
-    docs = sanitize_docs(docs, source="rag")
-
-    trace_buffer.push(trace_id, node="detail_search", event="exit", label="execute",
-                      data={
-                          "reconstructed_query": reconstructed_query,
-                          "source_filter": source_name,
-                          "docs_found": len(docs),
-                          "sources": [
-                              (getattr(d, "metadata", {}) or {}).get("display_source", "unknown")
-                              for d in docs
-                          ],
-                      })
-
-    return {
-        "input_data": reconstructed_query,
-        "task_args": {**task_args, "search_docs": docs, "search_query": reconstructed_query},
-        "clarification_count": 0,
-    }
