@@ -65,7 +65,7 @@ def _tokenize(text: str) -> List[str]:
 
 
 def _get_bm25():
-    """BM25 인덱스 싱글톤. ChromaDB 전체 문서로 구축."""
+    """BM25 인덱스 싱글톤. ChromaDB 전체 문서로 구축. 빈 corpus면 (None, []) 반환 후 캐시 안 함."""
     global _bm25_index, _bm25_docs
     if _bm25_index is not None:
         return _bm25_index, _bm25_docs
@@ -81,19 +81,28 @@ def _get_bm25():
         raw_docs = result.get("documents") or []
         raw_metas = result.get("metadatas") or []
 
-        _bm25_docs = [
+        bm25_docs = [
             Document(page_content=text, metadata=meta)
             for text, meta in zip(raw_docs, raw_metas)
             if text
         ]
-        tokenized = [_tokenize(d.page_content) for d in _bm25_docs]
+
+        # ChromaDB가 비어있으면 인덱스를 캐시하지 않고 (None, []) 반환.
+        # 다음 호출 시 다시 시도하여 인제스트 완료 후 자동 복구.
+        if not bm25_docs:
+            return None, []
+
+        tokenized = [_tokenize(d.page_content) for d in bm25_docs]
         _bm25_index = BM25Okapi(tokenized)
+        _bm25_docs = bm25_docs
 
     return _bm25_index, _bm25_docs
 
 
 def _search_bm25(query: str, k: int) -> List[Document]:
     bm25, docs = _get_bm25()
+    if bm25 is None:
+        return []
     tokens = _tokenize(query)
     scores = bm25.get_scores(tokens)
     top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]

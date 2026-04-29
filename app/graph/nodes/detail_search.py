@@ -80,7 +80,6 @@ def detail_search_node(state: GraphState) -> Dict[str, Any]:
     """직전 Q&A 컨텍스트 기반 상세 검색 노드."""
     print("--- [NODE] Detail Search ---")
 
-    trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
     task_args = state.get("task_args") or {}
 
@@ -95,3 +94,25 @@ def detail_search_node(state: GraphState) -> Dict[str, Any]:
             prev_human = str(msg.content)
             break
 
+    # 직전 컨텍스트가 없으면 일반 하이브리드 검색으로 fallback
+    if not prev_human or not prev_ai:
+        docs = _search_hybrid(user_input, k=_DETAIL_TOP_K)
+        docs = sanitize_docs(docs, source="rag")
+        return {
+            "task_args": {**task_args, "search_docs": docs, "search_query": user_input},
+        }
+
+    # LLM으로 쿼리 + 참조 문서명 재구성
+    reconstructed_query, source_name = _reconstruct_query(prev_human, prev_ai, user_input)
+
+    # 참조 문서명이 있으면 해당 문서 범위 내 확장 검색, 없으면 일반 확장 검색
+    docs = _search_with_filter(reconstructed_query, source_name)
+    docs = sanitize_docs(docs, source="rag")
+
+    return {
+        "task_args": {
+            **task_args,
+            "search_docs": docs,
+            "search_query": reconstructed_query,
+        },
+    }
