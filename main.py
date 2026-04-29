@@ -415,6 +415,16 @@ async def chat_endpoint(request: Request):
     # ── 응답 포맷팅 ───────────────────────────────────────────
     task_type = (result.get("task_type") or "").strip()
 
+    # 인젝션 거부 응답: rejection_node가 messages에 추가하지 않으므로 여기서 직접 반환.
+    # 이로써 인젝션 텍스트가 thread history에 누적되어 슬라이딩 윈도우 검사에서
+    # false positive를 유발하는 것을 방지한다.
+    if task_type == "injection":
+        return {
+            "type":    "chat",
+            "answer":  "해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
+            "sources": [],
+        }
+
     if task_type == "file_extract":
         text = (result.get("extracted_text") or "")[:20000]
         return {
