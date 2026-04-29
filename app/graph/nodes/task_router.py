@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import threading
 from typing import Any, Dict, List, Tuple
 
@@ -10,15 +9,12 @@ from app.graph.states.state import GraphState
 from app.graph.nodes.llm_intent_fallback import llm_intent_fallback
 from app.auth.intent_samples import load_all_samples, add_sample
 
-_ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "file_extract", "detail_search"}
+_ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "detail_search"}
 
 _DETAIL_HINTS = [
     "자세히", "자세하게", "더 알려줘", "좀 더", "구체적", "상세히", "상세하게",
     "더 설명", "추가로 설명", "자세한 내용", "더 자세한",
 ]
-
-_FILE_EXT_RE = re.compile(r"\.(pdf|docx|pptx|xlsx|txt|md)\b", re.I)
-_FILE_EXTRACT_HINTS = ["추출", "파싱", "텍스트", "본문", "extract", "parse"]
 
 _SAMPLE_VECTORS: Dict[str, List[List[float]]] | None = None
 _SAMPLE_LOCK = threading.Lock()
@@ -27,22 +23,6 @@ _SAMPLE_LOCK = threading.Lock()
 def _contains_any(text: str, keywords: List[str]) -> bool:
     t = (text or "").lower()
     return any(k.lower() in t for k in keywords)
-
-
-def _has_file_path_hint(text: str) -> bool:
-    t = text or ""
-    if _FILE_EXT_RE.search(t):
-        return True
-    if any(x in t for x in ["./", ".\\", "/", "\\"]):
-        return True
-    if _contains_any(t, ["경로", "file_path", "filepath", "파일경로"]):
-        return True
-    return False
-
-
-def _has_file_slot_reference(value: Any) -> bool:
-    text = (value or "").strip() if isinstance(value, str) else ""
-    return _has_file_path_hint(text)
 
 
 def invalidate_sample_cache() -> None:
@@ -69,18 +49,11 @@ def _load_sample_vectors() -> Dict[str, List[List[float]]]:
         return _SAMPLE_VECTORS
 
 
-def _quick_route(user_input: str) -> str:
-    """Rule-based 빠른 라우팅. 파일 추출 명시적 의도만 확정 반환."""
-    if _has_file_path_hint(user_input) and _contains_any(user_input, _FILE_EXTRACT_HINTS):
-        return "file_extract"
-    return "unknown"
-
-
 def _semantic_route(
     user_input: str,
     input_embedding: List[float] | None = None,
 ) -> Tuple[str, Dict[str, Any]]:
-    """Semantic 라우팅. _quick_route()에서 'unknown'인 경우만 실행."""
+    """Semantic 임베딩 기반 라우팅. file_extract 라우팅 제거 후 1차 라우터로 사용."""
     vectors = _load_sample_vectors()
     embeddings = get_embeddings()
 
@@ -104,11 +77,6 @@ def _semantic_route(
     decision = top1_task
     if top1_score < ROUTER_TOP1_MIN or margin < ROUTER_MARGIN_MIN:
         decision = "unknown"
-
-    # file_extract 신뢰도 재검증
-    if decision == "file_extract":
-        if not (_has_file_path_hint(user_input) and _contains_any(user_input, _FILE_EXTRACT_HINTS)):
-            decision = "unknown"
 
     debug = {
         "mode": "semantic",
@@ -135,29 +103,23 @@ def task_router_node(state: GraphState) -> GraphState:
         return {"task_type": "knowledge_search", "task_args": task_args}
 
     try:
-        # Step 1: Rule-based 빠른 라우팅
-        routed = _quick_route(user_input)
-        debug: Dict[str, Any] = {"mode": "rule_based", "final_source": "quick_route", "decision": routed}
+        # Step 1: Semantic 라우팅
+        routed, debug = _semantic_route(user_input, input_embedding)
+        debug["final_source"] = "semantic"
 
-        # Step 2: Semantic (quick_route 결과가 unknown이면만)
+        # Step 2: LLM Fallback (semantic 결과가 unknown이면)
         if routed == "unknown":
-            routed, debug = _semantic_route(user_input, input_embedding)
-
-            # Step 3: LLM Fallback (semantic도 unknown이면)
-            if routed == "unknown":
-                llm_task, llm_debug = llm_intent_fallback(user_input)
-                debug["llm_fallback"] = llm_debug
-                if llm_task != "unknown":
-                    routed = llm_task
-                    debug["decision"] = llm_task
-                    debug["final_source"] = "llm_fallback"
-                    added = add_sample(llm_task, user_input, source="llm_fallback")
-                    if added:
-                        invalidate_sample_cache()
-                else:
-                    debug["final_source"] = "unknown"
+            llm_task, llm_debug = llm_intent_fallback(user_input)
+            debug["llm_fallback"] = llm_debug
+            if llm_task != "unknown":
+                routed = llm_task
+                debug["decision"] = llm_task
+                debug["final_source"] = "llm_fallback"
+                added = add_sample(llm_task, user_input, source="llm_fallback")
+                if added:
+                    invalidate_sample_cache()
             else:
-                debug["final_source"] = "semantic"
+                debug["final_source"] = "unknown"
 
         # 상세 검색 감지: 후속 심화 패턴 + 직전 task가 knowledge_search/detail_search + 메시지 존재
         if routed in ("unknown", "knowledge_search"):
@@ -174,44 +136,21 @@ def task_router_node(state: GraphState) -> GraphState:
 
         # file_context 있는데 unknown이면 file_chat으로 fallback
         file_context_present = bool((state.get("file_context") or "").strip())
-        file_path_present = _has_file_slot_reference(task_args.get("file_path"))
-        pending_slots = [slot for slot in (task_args.get("missing_slots") or []) if slot in ("file_path", "file_context")]
+        pending_slots = [slot for slot in (task_args.get("missing_slots") or []) if slot == "file_context"]
 
         if routed == "unknown" and file_context_present:
             routed = "file_chat"
             debug["decision"] = "file_chat"
             debug["final_source"] = "file_context_fallback"
 
-        if routed == "unknown" and pending_slots:
-            if file_context_present:
-                routed = "file_chat"
-                debug["decision"] = "file_chat"
-                debug["final_source"] = "pending_file_slot_resolved"
-            elif file_path_present or _has_file_path_hint(user_input):
-                routed = "file_extract"
-                debug["decision"] = "file_extract"
-                debug["final_source"] = "pending_file_slot_resolved"
-            else:
-                routed = "clarification"
-                debug["decision"] = "clarification"
-                debug["final_source"] = "pending_file_slot"
-                debug["missing_slots"] = pending_slots
+        if routed == "unknown" and pending_slots and file_context_present:
+            routed = "file_chat"
+            debug["decision"] = "file_chat"
+            debug["final_source"] = "pending_file_slot_resolved"
 
-        if routed == "unknown" and file_path_present:
-            routed = "file_extract"
-            debug["decision"] = "file_extract"
-            debug["final_source"] = "file_path_resume"
-
-        if routed == "file_chat" and not file_context_present and file_path_present:
-            routed = "file_extract"
-            debug["decision"] = "file_extract"
-            debug["final_source"] = "file_path_resume"
-
-        # 슬롯 누락 감지: file_extract / file_chat 슬롯만 처리
+        # 슬롯 누락 감지: file_chat에 file_context 없을 때만
         missing_slots: list[str] = []
-        if routed == "file_extract" and not _has_file_path_hint(user_input) and not file_path_present:
-            missing_slots = ["file_path"]
-        elif routed == "file_chat" and not file_context_present and not file_path_present:
+        if routed == "file_chat" and not file_context_present:
             missing_slots = ["file_context"]
 
         if missing_slots:
@@ -227,25 +166,21 @@ def task_router_node(state: GraphState) -> GraphState:
         return {"task_type": routed, "task_args": merged_args}
 
     except Exception as e:
-        fallback = _quick_route(user_input)
-        if fallback == "unknown":
-            fallback = "knowledge_search"
         merged_args = {
             **task_args,
             "routing_debug": {
-                "mode": "rule_fallback", "decision": fallback,
+                "mode": "rule_fallback", "decision": "knowledge_search",
                 "final_source": "rule_fallback", "reason": str(e),
             },
         }
-        return {"task_type": fallback, "task_args": merged_args}
+        return {"task_type": "knowledge_search", "task_args": merged_args}
 
 
 def rejection_node(state: GraphState) -> Dict[str, Any]:
     """
     인젝션 시도 등으로 거부된 turn은 thread history에 추가하지 않는다.
     거부 응답 텍스트는 main.py /chat 엔드포인트가 task_type=injection을
-    감지해 직접 반환한다. 이로써 인젝션 텍스트가 messages에 누적되어
-    이후 슬라이딩 윈도우 검사에서 false positive를 유발하는 것을 방지한다.
+    감지해 직접 반환한다.
     """
     print("--- [NODE] Rejection ---")
     return {"citations_used": []}

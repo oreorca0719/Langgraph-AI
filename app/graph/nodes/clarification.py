@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, List
 
 from langgraph.types import interrupt
@@ -8,25 +7,7 @@ from langgraph.types import interrupt
 from app.graph.states.state import GraphState
 
 
-_FILE_REFERENCE_RE = re.compile(
-    r"(?:^|[\/\s])[^\/\s]+\.(pdf|docx|pptx|xlsx|xlsm|txt|md|csv|log)\b",
-    re.I,
-)
-
-
-def _looks_like_file_reference(value: str) -> bool:
-    text = (value or "").strip()
-    if not text:
-        return False
-    if _FILE_REFERENCE_RE.search(text):
-        return True
-    if any(token in text for token in ("./", ".\\", "/", "\\")):
-        return True
-    return False
-
-
 _SLOT_QUESTIONS: Dict[str, str] = {
-    "file_path":    "분석할 파일 경로 또는 파일명을 알려주세요.",
     "file_context": "첨부 파일이 필요합니다. 먼저 파일을 업로드해 주세요.",
 }
 
@@ -85,20 +66,6 @@ def clarification_slot_node(state: GraphState) -> Dict[str, Any]:
             "task_args": {**task_args, "missing_slots": []},
             "clarification_count": 0,
         }
-
-    # file_path 슬롯에 한해 형태 검증 (1회 재시도)
-    if slot == "file_path" and not _looks_like_file_reference(answer):
-        retry_raw = interrupt({
-            "type": "clarification",
-            "message": "파일 경로 또는 '이름.확장자' 형태로 다시 입력해 주세요.",
-        })
-        answer = (retry_raw or "").strip() if isinstance(retry_raw, str) else ""
-        if not answer or not _looks_like_file_reference(answer):
-            return {
-                "task_type": "knowledge_search",
-                "task_args": {**task_args, "missing_slots": []},
-                "clarification_count": 0,
-            }
 
     new_task_args = dict(task_args)
     new_task_args[slot] = answer

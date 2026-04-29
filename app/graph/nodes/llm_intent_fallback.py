@@ -15,7 +15,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from app.core.config import get_llm, LLM_FALLBACK_ENABLED, LLM_FALLBACK_TIMEOUT_SEC
 from app.core.history_utils import extract_text_content
 
-_ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "file_extract", "detail_search"}
+_ALLOWED = {"knowledge_search", "ai_guide", "file_chat", "detail_search"}
 _CONFIDENCE_MIN = 0.7  # 이 값 미만이면 unknown으로 처리
 
 _PROMPT = ChatPromptTemplate.from_template(
@@ -26,7 +26,6 @@ _PROMPT = ChatPromptTemplate.from_template(
     "- detail_search: 직전 검색 결과에 대한 후속 심화 질의\n"
     "- ai_guide: 인사, AI 자기소개, 기능 안내, 도움말 요청\n"
     "- file_chat: 첨부 파일 분석, 업로드한 파일 내용 질문\n"
-    "- file_extract: PDF·DOCX 등 파일 경로 지정 후 텍스트 추출\n"
     "- unknown: 위 태스크와 무관하거나 의도를 파악할 수 없는 경우\n\n"
     "규칙:\n"
     "- 확신도가 0.7 미만이면 반드시 unknown을 반환하세요.\n"
