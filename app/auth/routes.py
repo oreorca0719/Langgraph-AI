@@ -231,14 +231,14 @@ def admin_home(request: Request):
 
 # ── 관리자 - 재인제스트 ────────────────────────────────────
 # UI 카드(admin_home.html)에서 호출. 동시 호출은 lock으로 1회만 실행.
-# 강제 재처리: .ingest_state.json 삭제 후 auto_ingest_if_enabled() 실행 →
-# 모든 파일 hash 비교 fail → 전체 재청킹·재임베딩 적용.
+# 기본 동작: hash 비교로 변경된 파일만 재처리 (변경 없으면 skip, 신규/수정/삭제만 반영).
+# force=true: .ingest_state.json 삭제 후 전체 재청킹·재임베딩 (청킹 로직 변경 시 1회성 사용).
 
 _REINGEST_LOCK = threading.Lock()
 
 
 @router.post("/admin/api/reingest")
-def admin_reingest(request: Request):
+def admin_reingest(request: Request, force: bool = False):
     user = get_current_user(request)
     require_admin_user(user)
 
@@ -257,19 +257,21 @@ def admin_reingest(request: Request):
     try:
         from app.knowledge.ingest import auto_ingest_if_enabled
 
-        knowledge_dir = Path(os.getenv("KNOWLEDGE_DIR", "./knowledge_data"))
-        state_file = knowledge_dir / ".ingest_state.json"
-        if state_file.exists():
-            try:
-                state_file.unlink()
-            except OSError as e:
-                return JSONResponse(
-                    {"ok": False, "error": f"ingest state 파일 삭제 실패: {e}"},
-                    status_code=500,
-                )
+        if force:
+            knowledge_dir = Path(os.getenv("KNOWLEDGE_DIR", "./knowledge_data"))
+            state_file = knowledge_dir / ".ingest_state.json"
+            if state_file.exists():
+                try:
+                    state_file.unlink()
+                except OSError as e:
+                    return JSONResponse(
+                        {"ok": False, "error": f"ingest state 파일 삭제 실패: {e}"},
+                        status_code=500,
+                    )
 
         auto_ingest_if_enabled()
-        return JSONResponse({"ok": True, "message": "재인제스트가 완료되었습니다."})
+        msg = "전체 강제 재인제스트가 완료되었습니다." if force else "재인제스트가 완료되었습니다. 변경된 파일만 재처리되었으며, 변경 없는 파일은 skip되었습니다."
+        return JSONResponse({"ok": True, "message": msg, "force": force})
 
     except Exception as e:
         return JSONResponse(
