@@ -188,9 +188,6 @@ def quality_check_node(state: GraphState) -> Dict[str, Any]:
     else:
         ok = bool(docs)  # docs 없으면 rewrite, 있으면 통과
 
-    trace_buffer.push(trace_id, node="quality_check", event="exit", label="execute",
-                      data={"docs": len(docs), "retry_count": retry_count, "ok": ok})
-
     return {"task_args": {**task_args, "quality_ok": ok}}
 
 
@@ -214,9 +211,6 @@ def rewrite_node(state: GraphState) -> Dict[str, Any]:
     user_input = (state.get("input_data") or "").strip()
     retry_count = (state.get("retry_count") or 0) + 1
 
-    trace_buffer.push(trace_id, node="rewrite", event="enter", label="execute",
-                      data={"original": user_input[:100], "retry_count": retry_count})
-
     try:
         response = get_llm().invoke([
             SystemMessage(content=(
@@ -234,9 +228,6 @@ def rewrite_node(state: GraphState) -> Dict[str, Any]:
     except Exception:
         new_input = user_input
 
-    trace_buffer.push(trace_id, node="rewrite", event="exit", label="execute",
-                      data={"rewritten": new_input[:100]})
-
     return {"input_data": new_input, "retry_count": retry_count}
 
 
@@ -250,9 +241,6 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
     user_input = (state.get("input_data") or "").strip()
     task_args = state.get("task_args") or {}
     docs: List[Document] = task_args.get("search_docs") or []
-
-    trace_buffer.push(trace_id, node="answer", event="enter", label="execute",
-                      data={"input": user_input[:200], "docs": len(docs)})
 
     if not docs:
         final_message = AIMessage(
@@ -284,9 +272,6 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
         else:
             is_valid, safe_content = validate_output(text_for_validate)
             final_message = response if is_valid else AIMessage(content=safe_content)
-
-    trace_buffer.push(trace_id, node="answer", event="exit", label="execute",
-                      data={"response_len": len(str(final_message.content))})
 
     citations_used = []
     for i, doc in enumerate(docs, start=1):
