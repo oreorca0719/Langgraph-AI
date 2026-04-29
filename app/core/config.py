@@ -92,7 +92,6 @@ INGEST_CHUNK_MAX_CHARS = int(os.getenv("INGEST_CHUNK_MAX_CHARS", "1200"))
 
 ROUTER_TOP1_MIN  = float(os.getenv("ROUTER_TOP1_MIN",  "0.62"))
 ROUTER_MARGIN_MIN = float(os.getenv("ROUTER_MARGIN_MIN", "0.08"))
-EMAIL_DRAFT_HIGH_CONF_THRESHOLD = float(os.getenv("EMAIL_DRAFT_HIGH_CONF_THRESHOLD", "0.70"))
 
 
 # ──────────────────────────────────────────────

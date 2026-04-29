@@ -65,7 +65,7 @@ def _tokenize(text: str) -> List[str]:
 
 
 def _get_bm25():
-    """BM25 인덱스 싱글톤. ChromaDB 전체 문서로 구축."""
+    """BM25 인덱스 싱글톤. ChromaDB 전체 문서로 구축. 빈 corpus면 (None, []) 반환 후 캐시 안 함."""
     global _bm25_index, _bm25_docs
     if _bm25_index is not None:
         return _bm25_index, _bm25_docs
@@ -81,19 +81,28 @@ def _get_bm25():
         raw_docs = result.get("documents") or []
         raw_metas = result.get("metadatas") or []
 
-        _bm25_docs = [
+        bm25_docs = [
             Document(page_content=text, metadata=meta)
             for text, meta in zip(raw_docs, raw_metas)
             if text
         ]
-        tokenized = [_tokenize(d.page_content) for d in _bm25_docs]
+
+        # ChromaDB가 비어있으면 인덱스를 캐시하지 않고 (None, []) 반환.
+        # 다음 호출 시 다시 시도하여 인제스트 완료 후 자동 복구.
+        if not bm25_docs:
+            return None, []
+
+        tokenized = [_tokenize(d.page_content) for d in bm25_docs]
         _bm25_index = BM25Okapi(tokenized)
+        _bm25_docs = bm25_docs
 
     return _bm25_index, _bm25_docs
 
 
 def _search_bm25(query: str, k: int) -> List[Document]:
     bm25, docs = _get_bm25()
+    if bm25 is None:
+        return []
     tokens = _tokenize(query)
     scores = bm25.get_scores(tokens)
     top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:k]
@@ -188,9 +197,6 @@ def quality_check_node(state: GraphState) -> Dict[str, Any]:
     else:
         ok = bool(docs)  # docs 없으면 rewrite, 있으면 통과
 
-    trace_buffer.push(trace_id, node="quality_check", event="exit", label="execute",
-                      data={"docs": len(docs), "retry_count": retry_count, "ok": ok})
-
     return {"task_args": {**task_args, "quality_ok": ok}}
 
 
@@ -214,9 +220,6 @@ def rewrite_node(state: GraphState) -> Dict[str, Any]:
     user_input = (state.get("input_data") or "").strip()
     retry_count = (state.get("retry_count") or 0) + 1
 
-    trace_buffer.push(trace_id, node="rewrite", event="enter", label="execute",
-                      data={"original": user_input[:100], "retry_count": retry_count})
-
     try:
         response = get_llm().invoke([
             SystemMessage(content=(
@@ -234,9 +237,6 @@ def rewrite_node(state: GraphState) -> Dict[str, Any]:
     except Exception:
         new_input = user_input
 
-    trace_buffer.push(trace_id, node="rewrite", event="exit", label="execute",
-                      data={"rewritten": new_input[:100]})
-
     return {"input_data": new_input, "retry_count": retry_count}
 
 
@@ -250,9 +250,6 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
     user_input = (state.get("input_data") or "").strip()
     task_args = state.get("task_args") or {}
     docs: List[Document] = task_args.get("search_docs") or []
-
-    trace_buffer.push(trace_id, node="answer", event="enter", label="execute",
-                      data={"input": user_input[:200], "docs": len(docs)})
 
     if not docs:
         final_message = AIMessage(
@@ -284,9 +281,6 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
         else:
             is_valid, safe_content = validate_output(text_for_validate)
             final_message = response if is_valid else AIMessage(content=safe_content)
-
-    trace_buffer.push(trace_id, node="answer", event="exit", label="execute",
-                      data={"response_len": len(str(final_message.content))})
 
     citations_used = []
     for i, doc in enumerate(docs, start=1):
