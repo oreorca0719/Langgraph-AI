@@ -8,13 +8,11 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
-  <div class="app-shell"
-       data-conversation-id="{{ conversation_id or '' }}"
-       data-conversation-title="{{ conversation_title or '' }}">
+  <div class="app-shell">
     <header class="topbar">
       <div>
         <p class="eyebrow">Kaiper</p>
-        <h1 class="title">{{ conversation_title or 'Assistant' }}</h1>
+        <h1 class="title">Assistant</h1>
       </div>
       <div class="topbar-actions">
         {% if user and user.is_admin %}
@@ -27,7 +25,6 @@
     </header>
 
     <main id="chat-box">
-      {% if not history %}
       <div class="message bot">
         <div class="bot-avatar"></div>
         <div class="content">
@@ -35,11 +32,8 @@
           안녕하세요.<br><br>저는 임직원의 업무 효율을 높이기 위해 도입된 사내 AI 어시스턴트입니다.<br><br>어떤 도움이 필요하신가요?
         </div>
       </div>
-      {% endif %}
     </main>
   </div>
-
-  <script id="conv-history-data" type="application/json">{{ history|tojson }}</script>
 
   <div class="input-container">
     <div class="input-wrapper">
@@ -55,6 +49,6 @@
     </div>
   </div>
 
-  <script src="/static/js/chat.js?v=3"></script>
+  <script src="/static/js/chat.js?v=2"></script>
 </body>
 </html>

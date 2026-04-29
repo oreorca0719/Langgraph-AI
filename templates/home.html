@@ -126,83 +126,6 @@
       font-size: 13px;
       padding: 12px 0;
     }
-
-    .conv-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-bottom: 32px;
-    }
-
-    .conv-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 14px 18px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: var(--surface-strong);
-      transition: border-color 0.15s, transform 0.15s;
-    }
-
-    .conv-row:hover {
-      border-color: rgba(87, 208, 255, 0.5);
-      transform: translateY(-1px);
-    }
-
-    .conv-link {
-      flex: 1 1 auto;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      text-decoration: none;
-      color: var(--text);
-      min-width: 0;
-    }
-
-    .conv-title {
-      font-size: 14px;
-      font-weight: 600;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .conv-meta {
-      font-size: 12px;
-      color: var(--text-dim);
-    }
-
-    .conv-delete {
-      flex: 0 0 auto;
-      background: transparent;
-      border: 1px solid rgba(255, 111, 143, 0.4);
-      color: var(--danger);
-      padding: 6px 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-
-    .conv-delete:hover {
-      background: rgba(255, 111, 143, 0.12);
-    }
-
-    .section-title-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 14px;
-    }
-
-    .section-title-row .section-title {
-      margin-bottom: 0;
-    }
-
-    .section-counter {
-      font-size: 12px;
-      color: var(--text-dim);
-    }
   </style>
 </head>
 <body>
@@ -236,30 +159,9 @@
       <div class="menu-icon" style="font-size:36px;">🤖</div>
       <div>
         <div class="menu-label" style="font-size:18px;">사무 보조 AI 어시스턴트</div>
-        <div class="menu-desc">사내 문서 검색·심화 검색·파일 분석을 도와드립니다</div>
+        <div class="menu-desc">질문, 문서 검색, 이메일·RFP 초안 작성, 파일 분석을 도와드립니다</div>
       </div>
     </a>
-
-    <!-- 대화 내역 -->
-    <div class="section-title-row">
-      <p class="section-title">대화 내역</p>
-      <span class="section-counter">{{ conversations|length }} / {{ max_conversations }}</span>
-    </div>
-    {% if conversations %}
-    <div class="conv-list" id="conv-list">
-      {% for c in conversations %}
-      <div class="conv-row" data-cid="{{ c.conversation_id }}">
-        <a class="conv-link" href="/chat?cid={{ c.conversation_id }}">
-          <span class="conv-title">{{ c.title or '(제목 없음)' }}</span>
-          <span class="conv-meta">{{ c.updated_at_str }} · {{ c.message_count }}개 메시지</span>
-        </a>
-        <button class="conv-delete" type="button" data-cid="{{ c.conversation_id }}">삭제</button>
-      </div>
-      {% endfor %}
-    </div>
-    {% else %}
-    <p class="empty-recent">아직 저장된 대화가 없습니다. 새 대화를 시작해 보세요.</p>
-    {% endif %}
 
     <!-- 최근 이용 내역 -->
     <p class="section-title">최근 이용 내역</p>
@@ -286,41 +188,5 @@
     <p class="empty-recent">아직 이용 내역이 없습니다.</p>
     {% endif %}
   </div>
-
-  <script>
-    // 대화 삭제: 부모 row 단위로 제거 + 백엔드 호출
-    document.querySelectorAll('.conv-delete').forEach((btn) => {
-      btn.addEventListener('click', async (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const cid = btn.dataset.cid;
-        if (!cid) return;
-        if (!confirm('이 대화를 삭제할까요? 이 작업은 되돌릴 수 없습니다.')) return;
-
-        btn.disabled = true;
-        try {
-          const res = await fetch(`/conversations/${encodeURIComponent(cid)}`, { method: 'DELETE' });
-          if (!res.ok) throw new Error('삭제 실패');
-          const row = btn.closest('.conv-row');
-          if (row) row.remove();
-          // 카운터 갱신
-          const counter = document.querySelector('.section-counter');
-          if (counter) {
-            const remaining = document.querySelectorAll('.conv-row').length;
-            counter.textContent = counter.textContent.replace(/^\d+/, String(remaining));
-          }
-          if (document.querySelectorAll('.conv-row').length === 0) {
-            const list = document.getElementById('conv-list');
-            if (list) {
-              list.outerHTML = '<p class="empty-recent">아직 저장된 대화가 없습니다. 새 대화를 시작해 보세요.</p>';
-            }
-          }
-        } catch (e) {
-          alert('대화 삭제 중 오류가 발생했습니다: ' + (e?.message || e));
-          btn.disabled = false;
-        }
-      });
-    });
-  </script>
 </body>
 </html>
