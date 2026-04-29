@@ -4,7 +4,7 @@ import base64
 import json
 import os
 import time
-from typing import Any, Dict, Iterator, Optional, Sequence, Tuple
+from typing import Any, Iterator, Optional, Sequence, Tuple
 
 import boto3
 from botocore.exceptions import ClientError

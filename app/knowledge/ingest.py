@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 

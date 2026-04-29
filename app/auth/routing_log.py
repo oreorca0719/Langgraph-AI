@@ -46,33 +46,6 @@ def ensure_routing_log_table() -> None:
     print(f"[ROUTING_LOG] Table created: {name}")
 
 
-def scan_recent_logs(limit: int = 50) -> list:
-    """최근 라우팅 로그를 timestamp 내림차순으로 반환합니다."""
-    try:
-        client = boto3.client("dynamodb", region_name=_region())
-        paginator = client.get_paginator("scan")
-        items = []
-        for page in paginator.paginate(TableName=_log_table_name()):
-            for raw in page.get("Items", []):
-                items.append({
-                    "log_id": raw.get("log_id", {}).get("S", ""),
-                    "timestamp": int(raw.get("timestamp", {}).get("N", 0)),
-                    "user_id": raw.get("user_id", {}).get("S", ""),
-                    "input_text": raw.get("input_text", {}).get("S", ""),
-                    "final_task": raw.get("final_task", {}).get("S", ""),
-                    "mode": raw.get("mode", {}).get("S", ""),
-                    "top1_score": raw.get("top1_score", {}).get("S", ""),
-                    "margin": raw.get("margin", {}).get("S", ""),
-                    "semantic_decision": raw.get("semantic_decision", {}).get("S", ""),
-                })
-        items.sort(key=lambda x: x["timestamp"], reverse=True)
-        return items[:limit]
-    except Exception as e:
-        print(f"[ROUTING_LOG] scan failed: {e}")
-        return []
-
-
-
 def scan_user_recent_logs(user_id: str, limit: int = 5) -> list:
     """특정 사용자의 최근 라우팅 로그를 반환합니다."""
     try:
@@ -93,37 +66,6 @@ def scan_user_recent_logs(user_id: str, limit: int = 5) -> list:
     except Exception as e:
         print(f"[ROUTING_LOG] scan_user failed: {e}")
         return []
-
-
-def delete_routing_log(log_id: str) -> bool:
-    """log_id로 단일 라우팅 로그를 삭제합니다."""
-    try:
-        _log_table().delete_item(Key={"log_id": log_id})
-        return True
-    except Exception as e:
-        print(f"[ROUTING_LOG] delete failed: {e}")
-        return False
-
-
-def delete_all_routing_logs() -> int:
-    """전체 라우팅 로그를 삭제하고 삭제된 건수를 반환합니다."""
-    try:
-        client = boto3.client("dynamodb", region_name=_region())
-        paginator = client.get_paginator("scan")
-        log_ids = []
-        for page in paginator.paginate(TableName=_log_table_name(), ProjectionExpression="log_id"):
-            for raw in page.get("Items", []):
-                log_id = raw.get("log_id", {}).get("S", "")
-                if log_id:
-                    log_ids.append(log_id)
-        tbl = _log_table()
-        with tbl.batch_writer() as batch:
-            for lid in log_ids:
-                batch.delete_item(Key={"log_id": lid})
-        return len(log_ids)
-    except Exception as e:
-        print(f"[ROUTING_LOG] delete_all failed: {e}")
-        return 0
 
 
 def save_routing_log(

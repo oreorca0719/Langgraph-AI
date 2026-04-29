@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import os
 import re
 import secrets
-from datetime import datetime
+import threading
+from pathlib import Path
 from typing import Optional
 
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
@@ -18,7 +17,7 @@ def _is_readonly(user: dict) -> bool:
     return (user.get("email") or "").strip().lower() == _READONLY_EMAIL
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from jinja2 import TemplateNotFound
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -35,8 +34,6 @@ from .dynamo import (
 )
 from .deps import get_current_user, require_admin_user
 from .security import hash_password, verify_password
-from .routing_log import scan_recent_logs, delete_routing_log, delete_all_routing_logs
-from .intent_samples import add_sample, load_all_samples, reset_seed_samples
 
 router = APIRouter()
 _limiter = Limiter(key_func=get_remote_address, config_filename="__no_env__")
@@ -231,4 +228,54 @@ def admin_home(request: Request):
     require_admin_user(user)
     return _render(request, "admin_home.html", {"user": user, "read_only": _is_readonly(user)})
 
+
+# ── 관리자 - 재인제스트 ────────────────────────────────────
+# UI 카드(admin_home.html)에서 호출. 동시 호출은 lock으로 1회만 실행.
+# 강제 재처리: .ingest_state.json 삭제 후 auto_ingest_if_enabled() 실행 →
+# 모든 파일 hash 비교 fail → 전체 재청킹·재임베딩 적용.
+
+_REINGEST_LOCK = threading.Lock()
+
+
+@router.post("/admin/api/reingest")
+def admin_reingest(request: Request):
+    user = get_current_user(request)
+    require_admin_user(user)
+
+    if _is_readonly(user):
+        return JSONResponse(
+            {"ok": False, "error": "읽기 전용 계정은 재인제스트를 실행할 수 없습니다."},
+            status_code=403,
+        )
+
+    if not _REINGEST_LOCK.acquire(blocking=False):
+        return JSONResponse(
+            {"ok": False, "error": "이미 다른 재인제스트 작업이 진행 중입니다."},
+            status_code=409,
+        )
+
+    try:
+        from app.knowledge.ingest import auto_ingest_if_enabled
+
+        knowledge_dir = Path(os.getenv("KNOWLEDGE_DIR", "./knowledge_data"))
+        state_file = knowledge_dir / ".ingest_state.json"
+        if state_file.exists():
+            try:
+                state_file.unlink()
+            except OSError as e:
+                return JSONResponse(
+                    {"ok": False, "error": f"ingest state 파일 삭제 실패: {e}"},
+                    status_code=500,
+                )
+
+        auto_ingest_if_enabled()
+        return JSONResponse({"ok": True, "message": "재인제스트가 완료되었습니다."})
+
+    except Exception as e:
+        return JSONResponse(
+            {"ok": False, "error": f"{type(e).__name__}: {e}"},
+            status_code=500,
+        )
+    finally:
+        _REINGEST_LOCK.release()
 
