@@ -101,16 +101,45 @@ def _read_xlsx(path: Path) -> str:
 
 
 def _read_pptx(file_path: str) -> str:
-    """PPTX: 슬라이드 내 도형 텍스트 + 표(마크다운 변환) 추출.
-    표는 _table_to_markdown으로 구조 보존. 슬라이드 단위 메타데이터·노트는 후속 PR에서 추가.
+    """PPTX: 슬라이드 단위 단락 분리 + 제목 헤딩 + 표 마크다운 + 발표자 노트.
+
+    각 슬라이드 출력 형식:
+        ## 슬라이드 N
+        ### {제목}
+        본문 도형 텍스트들...
+        | 표 | 마크다운 |
+        ### 발표자 노트
+        노트 텍스트...
+
+    슬라이드 간 \\n\\n으로 단락 분리하여 청킹 시 슬라이드 경계 보존.
+    검색 시 슬라이드 번호·제목으로 위치 추적 가능.
     """
     from pptx import Presentation
 
     prs = Presentation(file_path)
-    out: list[str] = []
+    slide_blocks: List[str] = []
 
-    for slide in prs.slides:
+    for idx, slide in enumerate(prs.slides, start=1):
+        parts: List[str] = []
+
+        # 1. 슬라이드 번호 헤딩
+        parts.append(f"## 슬라이드 {idx}")
+
+        # 2. 슬라이드 제목 추출
+        title_shape = None
+        try:
+            title_shape = slide.shapes.title
+        except Exception:
+            title_shape = None
+        if title_shape is not None:
+            title_text = (title_shape.text or "").strip()
+            if title_text:
+                parts.append(f"### {title_text}")
+
+        # 3. 본문 도형 + 표 (제목 도형은 중복 회피)
         for shape in slide.shapes:
+            if title_shape is not None and shape is title_shape:
+                continue
             if getattr(shape, "has_table", False):
                 rows: List[List[str]] = []
                 for row in shape.table.rows:
@@ -118,11 +147,24 @@ def _read_pptx(file_path: str) -> str:
                     if any(cells):
                         rows.append(cells)
                 if rows:
-                    out.append(_table_to_markdown(rows))
+                    parts.append(_table_to_markdown(rows))
             elif hasattr(shape, "text") and shape.text:
-                out.append(shape.text)
+                text = shape.text.strip()
+                if text:
+                    parts.append(text)
 
-    return "\n".join(out).strip()
+        # 4. 발표자 노트
+        try:
+            if slide.has_notes_slide:
+                notes_text = (slide.notes_slide.notes_text_frame.text or "").strip()
+                if notes_text:
+                    parts.append(f"### 발표자 노트\n{notes_text}")
+        except Exception:
+            pass
+
+        slide_blocks.append("\n\n".join(parts))
+
+    return "\n\n".join(slide_blocks).strip()
 
 
 def extract_text_from_file(path: Path) -> Tuple[str, Dict[str, Any]]:
