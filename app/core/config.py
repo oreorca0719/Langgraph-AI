@@ -84,6 +84,7 @@ AUTO_INGEST          = os.getenv("AUTO_INGEST",          "1")
 S3_KNOWLEDGE_BUCKET  = os.getenv("S3_KNOWLEDGE_BUCKET",  "")
 S3_KNOWLEDGE_PREFIX  = os.getenv("S3_KNOWLEDGE_PREFIX",  "knowledge_data/")
 INGEST_CHUNK_MAX_CHARS = int(os.getenv("INGEST_CHUNK_MAX_CHARS", "1200"))
+INGEST_CHUNK_OVERLAP   = int(os.getenv("INGEST_CHUNK_OVERLAP",   "200"))
 
 
 # ──────────────────────────────────────────────
