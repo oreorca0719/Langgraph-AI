@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import threading
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from app.core.config import (
     get_embeddings, get_llm,
     CHROMA_DB_PATH, CHROMA_COLLECTION,
-    RETRIEVAL_MIN_RELEVANCE, RETRIEVAL_MAX_DISTANCE, RETRIEVAL_TOP_K,
+    RETRIEVAL_MIN_RELEVANCE, RETRIEVAL_TOP_K,
 )
 from app.core.history_utils import (
     extract_text_content,
