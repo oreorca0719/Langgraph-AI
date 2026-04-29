@@ -134,15 +134,17 @@ def _reciprocal_rank_fusion(
 
 
 def _search_hybrid(query: str, k: int = RETRIEVAL_TOP_K) -> List[Document]:
-    """시맨틱 + BM25 하이브리드 검색 (RRF 병합)."""
+    """시맨틱 + BM25 하이브리드 검색 (RRF 병합).
+
+    시맨틱 결과 양과 무관하게 항상 BM25 결과와 RRF로 병합한다.
+    키워드 정확 매칭(고유명사·약어)과 의미적 유사도를 동시에 활용해
+    검색 정밀도를 높이는 것이 RRF 하이브리드의 본 의도이며,
+    이전 'semantic 결과가 k개 이상이면 BM25 생략' 최적화는 README 명세
+    ('하이브리드+RRF')와 어긋나 BM25를 사실상 무력화시켰다.
+    """
     fetch_k = k * _HYBRID_FETCH_MULTIPLIER
     vectorstore = _get_chroma()
     semantic_docs = vectorstore.similarity_search(query, k=fetch_k)
-
-    # ✅ Phase 4: Semantic 결과가 k개 이상이면 BM25 생략 (응답 시간 20-40% 단축)
-    if len(semantic_docs) >= k:
-        return semantic_docs[:k]
-
     bm25_docs = _search_bm25(query, k=fetch_k)
     return _reciprocal_rank_fusion(semantic_docs, bm25_docs, k=k)
 
