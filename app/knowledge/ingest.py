@@ -18,12 +18,14 @@ from app.core.config import (
     CHROMA_DB_PATH,
     CHROMA_COLLECTION,
     INGEST_CHUNK_MAX_CHARS,
+    INGEST_CHUNK_OVERLAP,
 )
 
 # 지원 형식 (file_extractor와 동일 셋)
 _SUPPORTED_SUFFIXES = {".txt", ".md", ".pdf", ".docx", ".xlsx", ".xlsm", ".pptx"}
 
 _CHUNK_MAX_CHARS = INGEST_CHUNK_MAX_CHARS
+_CHUNK_OVERLAP   = INGEST_CHUNK_OVERLAP
 _STATE_FILE = ".ingest_state.json"
 
 
@@ -65,8 +67,17 @@ def _extract_pdf_pages(p: Path) -> List[Tuple[int, str]]:
 # 청킹
 # ──────────────────────────────────────────────
 
-def _chunk_text(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> List[str]:
-    """단락 기반 청킹. 단락이 max_chars 초과 시 고정 크기로 재분할."""
+def _chunk_text(
+    text: str,
+    max_chars: int = _CHUNK_MAX_CHARS,
+    overlap: int = _CHUNK_OVERLAP,
+) -> List[str]:
+    """단락 기반 청킹. 청크 간 overlap 만큼 겹쳐 단락 경계 누락을 방지.
+
+    - 큰 단락(>max_chars): 슬라이딩 윈도우로 절단(step = max_chars - overlap).
+    - 누적 청크가 max_chars 초과 시: 확정 후 새 청크는 직전 청크 끝 overlap 글자로 시작.
+    - overlap=0이면 종전 동작(오버랩 없음).
+    """
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
 
     chunks: List[str] = []
@@ -78,11 +89,19 @@ def _chunk_text(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> List[str]:
             if current:
                 chunks.append("\n\n".join(current))
                 current, current_len = [], 0
-            for i in range(0, len(para), max_chars):
+            step = max(max_chars - overlap, 1)
+            for i in range(0, len(para), step):
                 chunks.append(para[i : i + max_chars])
         elif current_len + len(para) + 2 > max_chars and current:
-            chunks.append("\n\n".join(current))
-            current, current_len = [para], len(para)
+            confirmed = "\n\n".join(current)
+            chunks.append(confirmed)
+            if overlap > 0:
+                tail = confirmed[-overlap:]
+                current = [tail, para]
+                current_len = len(tail) + len(para) + 2
+            else:
+                current = [para]
+                current_len = len(para)
         else:
             current.append(para)
             current_len += len(para) + 2
@@ -90,7 +109,7 @@ def _chunk_text(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> List[str]:
     if current:
         chunks.append("\n\n".join(current))
 
-    return chunks or [text[:max_chars]] if text else []
+    return chunks or ([text[:max_chars]] if text else [])
 
 
 # ──────────────────────────────────────────────
