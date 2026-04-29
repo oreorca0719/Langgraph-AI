@@ -4,8 +4,6 @@ import re
 import threading
 from typing import Any, Dict, List, Tuple
 
-from langchain_core.messages import AIMessage, HumanMessage
-
 from app.core.config import get_embeddings, ROUTER_TOP1_MIN, ROUTER_MARGIN_MIN
 from app.core.history_utils import cosine as _cosine
 from app.graph.states.state import GraphState
@@ -243,15 +241,14 @@ def task_router_node(state: GraphState) -> GraphState:
 
 
 def rejection_node(state: GraphState) -> Dict[str, Any]:
+    """
+    인젝션 시도 등으로 거부된 turn은 thread history에 추가하지 않는다.
+    거부 응답 텍스트는 main.py /chat 엔드포인트가 task_type=injection을
+    감지해 직접 반환한다. 이로써 인젝션 텍스트가 messages에 누적되어
+    이후 슬라이딩 윈도우 검사에서 false positive를 유발하는 것을 방지한다.
+    """
     print("--- [NODE] Rejection ---")
-    user_input = (state.get("input_data") or "").strip()
-    return {
-        "messages": [
-            HumanMessage(content=user_input),
-            AIMessage(content="해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요."),
-        ],
-        "citations_used": [],
-    }
+    return {"citations_used": []}
 
 
 def _unknown_fallback_route(state: GraphState) -> str:
