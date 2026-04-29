@@ -169,9 +169,7 @@ def search_node(state: GraphState) -> Dict[str, Any]:
     """ChromaDB 벡터 검색."""
     print("--- [NODE] Search ---")
 
-    trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
-    retry_count = state.get("retry_count") or 0
 
     docs = _search_hybrid(user_input, k=RETRIEVAL_TOP_K)
     docs = sanitize_docs(docs, source="rag")
@@ -189,7 +187,6 @@ def quality_check_node(state: GraphState) -> Dict[str, Any]:
     """
     print("--- [NODE] Quality Check ---")
 
-    trace_id = (state.get("trace_id") or "")
     task_args = state.get("task_args") or {}
     docs: List[Document] = task_args.get("search_docs") or []
     retry_count = state.get("retry_count") or 0
@@ -218,7 +215,6 @@ def rewrite_node(state: GraphState) -> Dict[str, Any]:
     """LLM으로 검색 쿼리를 재작성하고 retry_count를 증가."""
     print("--- [NODE] Rewrite ---")
 
-    trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
     retry_count = (state.get("retry_count") or 0) + 1
 
@@ -248,7 +244,6 @@ def answer_node(state: GraphState) -> Dict[str, Any]:
     """검색 결과를 바탕으로 LLM 답변 생성."""
     print("--- [NODE] Answer ---")
 
-    trace_id = (state.get("trace_id") or "")
     user_input = (state.get("input_data") or "").strip()
     task_args = state.get("task_args") or {}
     docs: List[Document] = task_args.get("search_docs") or []

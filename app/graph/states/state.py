@@ -16,8 +16,6 @@ class GraphState(TypedDict, total=False):
     citations_used: List[Dict[str, Any]]
 
     # ── 파일 ────────────────────────────────────────────────
-    extracted_text: str
-    extracted_meta: Dict[str, Any]
     file_context: Optional[str]
     file_context_name: Optional[str]
 

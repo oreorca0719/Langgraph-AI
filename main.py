@@ -35,7 +35,6 @@ from app.graph.nodes.knowledge_search import (
 from app.graph.nodes.detail_search import detail_search_node
 from app.graph.nodes.ai_guide import ai_guide_node
 from app.graph.nodes.file_chat import file_chat_node
-from app.graph.nodes.file_extractor import file_extractor_node
 from app.security.content_sanitizer import sanitize as sanitize_content
 from app.security.output_validator import validate as validate_output
 from app.knowledge.ingest import auto_ingest_if_enabled
@@ -68,7 +67,6 @@ workflow.add_node("rewrite",               rewrite_node)
 workflow.add_node("answer",                answer_node)
 workflow.add_node("ai_guide",              ai_guide_node)
 workflow.add_node("file_chat",             file_chat_node)
-workflow.add_node("file_extract",          file_extractor_node)
 workflow.add_node("detail_search",         detail_search_node)
 
 workflow.set_entry_point("input_guard")
@@ -88,7 +86,6 @@ workflow.add_conditional_edges(
         "detail_search":    "detail_search",
         "ai_guide":         "ai_guide",
         "file_chat":        "file_chat",
-        "file_extract":     "file_extract",
         "rejection":        "rejection",
         "clarification":    "clarification",
     },
@@ -122,7 +119,6 @@ workflow.add_edge("detail_search", "answer")
 workflow.add_edge("answer",      END)
 workflow.add_edge("ai_guide",    END)
 workflow.add_edge("file_chat",   END)
-workflow.add_edge("file_extract", END)
 workflow.add_edge("rejection",   END)
 
 graph_app = workflow.compile(checkpointer=memory)
@@ -422,16 +418,6 @@ async def chat_endpoint(request: Request):
         return {
             "type":    "chat",
             "answer":  "해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
-            "sources": [],
-        }
-
-    if task_type == "file_extract":
-        text = (result.get("extracted_text") or "")[:20000]
-        return {
-            "type":   "file_extract",
-            "meta":   result.get("extracted_meta"),
-            "text":   text,
-            "answer": "파일 추출이 완료되었습니다.",
             "sources": [],
         }
 

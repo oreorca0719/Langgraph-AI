@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from app.graph.states.state import GraphState
-
 
 def _table_to_markdown(rows: List[List[str]]) -> str:
     """행 리스트를 마크다운 표로 변환. 첫 행을 헤더로 사용. 빈 입력은 ''."""
@@ -189,11 +187,4 @@ def extract_text_from_file(path: Path) -> Tuple[str, Dict[str, Any]]:
 
     raise RuntimeError(f"지원하지 않는 파일 형식: {suffix}")
 
-
-def file_extractor_node(state: GraphState) -> GraphState:
-    print("--- [NODE] File Extractor ---")
-
-    trace_id = (state.get("trace_id") or "")
-    args = state.get("task_args") or {}
-    file_path = (args.get("file_path") or "").strip()
 
