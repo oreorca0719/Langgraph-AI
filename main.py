@@ -21,6 +21,17 @@ from slowapi.errors import RateLimitExceeded
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 from app.checkpointer.dynamo_checkpointer import DynamoDBCheckpointer, ensure_checkpoints_table
+from app.conversations.dynamo import (
+    ensure_conversations_table,
+    list_conversations,
+    get_conversation,
+    create_conversation,
+    update_conversation,
+    delete_conversation,
+    load_conversation_messages,
+    derive_thread_id,
+    MAX_CONVERSATIONS_PER_USER,
+)
 
 from app.core.config import has_gemini_api_key
 from app.graph.states.state import GraphState
@@ -171,6 +182,7 @@ async def lifespan(app: FastAPI):
     ensure_routing_log_table()
     ensure_intent_samples_table()
     ensure_checkpoints_table()
+    ensure_conversations_table()
     seed_intent_samples()
     ensure_initial_admin()
     auto_ingest_if_enabled()
@@ -266,11 +278,20 @@ async def home(request: Request):
     last_login = full_user.get("updated_at")
     last_login_str = datetime.fromtimestamp(float(last_login)).strftime("%Y-%m-%d %H:%M") if last_login else "-"
 
+    conversations = list_conversations(user_id)
+    for conv in conversations:
+        ts = conv.get("updated_at", 0)
+        conv["updated_at_str"] = (
+            datetime.fromtimestamp(ts).strftime("%m-%d %H:%M") if ts else ""
+        )
+
     return templates.TemplateResponse(request, "home.html", {
         "request": request,
         "user": full_user,
         "recent_logs": recent_logs,
         "last_login_str": last_login_str,
+        "conversations": conversations,
+        "max_conversations": MAX_CONVERSATIONS_PER_USER,
     })
 
 
@@ -289,17 +310,59 @@ async def index(request: Request):
             return RedirectResponse(url="/pending", status_code=303)
         raise
 
-    return templates.TemplateResponse(request, "index.html", {"request": request, "user": user})
+    cid = (request.query_params.get("cid") or "").strip()
+    user_id = str(user.get("user_id") or user.get("email"))
+
+    conversation_id: str = ""
+    title: str = ""
+    history: list = []
+    if cid:
+        meta = get_conversation(user_id, cid)
+        if meta:
+            conversation_id = cid
+            title = meta.get("title") or ""
+            history = load_conversation_messages(user_id, cid)
+
+    return templates.TemplateResponse(request, "index.html", {
+        "request":         request,
+        "user":            user,
+        "conversation_id": conversation_id,
+        "conversation_title": title,
+        "history":         history,
+    })
 
 
 # =========================
-# Chat Reset Endpoint
+# Conversations Endpoints
 # =========================
-@app.post("/chat/reset")
-async def chat_reset(request: Request):
+@app.get("/conversations")
+async def conversations_list(request: Request):
     user = get_current_user(request)
-    thread_id = str(user.get("user_id") or user.get("email"))
-    memory.delete(thread_id)
+    require_approved_user(user)
+    user_id = str(user.get("user_id") or user.get("email"))
+    return {"conversations": list_conversations(user_id)}
+
+
+@app.get("/conversations/{conversation_id}")
+async def conversations_get(conversation_id: str, request: Request):
+    user = get_current_user(request)
+    require_approved_user(user)
+    user_id = str(user.get("user_id") or user.get("email"))
+    meta = get_conversation(user_id, conversation_id)
+    if not meta:
+        raise HTTPException(status_code=404, detail="대화를 찾을 수 없습니다.")
+    return {
+        "conversation": meta,
+        "messages": load_conversation_messages(user_id, conversation_id),
+    }
+
+
+@app.delete("/conversations/{conversation_id}")
+async def conversations_delete(conversation_id: str, request: Request):
+    user = get_current_user(request)
+    require_approved_user(user)
+    user_id = str(user.get("user_id") or user.get("email"))
+    delete_conversation(user_id, conversation_id)
     return {"ok": True}
 
 
@@ -313,6 +376,7 @@ async def chat_endpoint(request: Request):
 
     data = await request.json()
     user_input = data.get("message", "")
+    conversation_id = (data.get("conversation_id") or "").strip()
 
     _max_input = int(os.getenv("CHAT_MAX_INPUT_CHARS", "4000"))
     if len(user_input) > _max_input:
@@ -320,8 +384,20 @@ async def chat_endpoint(request: Request):
 
     _ensure_llm_ready_or_503()
 
-    trace_id  = str(uuid.uuid4())
-    thread_id = str(user.get("user_id") or user.get("email"))
+    trace_id = str(uuid.uuid4())
+    user_id  = str(user.get("user_id") or user.get("email"))
+
+    # 대화 식별자 정규화 — 없거나 사용자 소유가 아니면 새로 생성
+    is_new_conversation = False
+    if conversation_id:
+        if not get_conversation(user_id, conversation_id):
+            conversation_id = ""
+    if not conversation_id:
+        title = (user_input[:30].strip() or "(새 대화)")
+        conversation_id = create_conversation(user_id, title=title)
+        is_new_conversation = True
+
+    thread_id = derive_thread_id(user_id, conversation_id)
     config    = {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": 15,
@@ -392,12 +468,13 @@ async def chat_endpoint(request: Request):
             interrupt_data = {}
         interrupt_type_val = interrupt_data.get("type", "")
         return JSONResponse({
-            "type":           "interrupt",
-            "interrupt_type": interrupt_type_val,
-            "message":        interrupt_data.get("message", ""),
-            "hint":           interrupt_data.get("hint", ""),
-            "current_task":   interrupt_type_val,
-            "sources":        [],
+            "type":            "interrupt",
+            "interrupt_type":  interrupt_type_val,
+            "message":         interrupt_data.get("message", ""),
+            "hint":            interrupt_data.get("hint", ""),
+            "current_task":    interrupt_type_val,
+            "sources":         [],
+            "conversation_id": conversation_id,
         })
 
     # ── 라우팅 로그 저장 ──────────────────────────────────────
@@ -415,10 +492,15 @@ async def chat_endpoint(request: Request):
     # 이로써 인젝션 텍스트가 thread history에 누적되어 슬라이딩 윈도우 검사에서
     # false positive를 유발하는 것을 방지한다.
     if task_type == "injection":
+        # 인젝션만으로 신규 대화가 만들어졌다면 빈 껍데기를 정리한다.
+        if is_new_conversation:
+            delete_conversation(user_id, conversation_id)
+            conversation_id = ""
         return {
-            "type":    "chat",
-            "answer":  "해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
-            "sources": [],
+            "type":            "chat",
+            "answer":          "해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
+            "sources":         [],
+            "conversation_id": conversation_id,
         }
 
     # 기본 chat 응답
@@ -444,10 +526,13 @@ async def chat_endpoint(request: Request):
         if isinstance(s, dict) and isinstance(s.get("id"), int) and s.get("id") in cited_ids
     ]
 
+    update_conversation(user_id, conversation_id, increment_messages=2)
+
     return {
-        "type":    "chat",
-        "answer":  final_text,
-        "sources": filtered_sources or [],
+        "type":            "chat",
+        "answer":          final_text,
+        "sources":         filtered_sources or [],
+        "conversation_id": conversation_id,
     }
 
 
@@ -476,11 +561,16 @@ def _verify_mime(content: bytes, suffix: str) -> bool:
     return any(content[off: off + len(magic)] == magic for off, magic in sigs)
 
 
-def _get_chat_thread_config(user: dict) -> dict:
-    base_thread = str(user.get("user_id") or user.get("email"))
-    scope = (os.getenv("THREAD_CONTEXT_SCOPE", "user") or "user").strip().lower()
-    thread_id = f"{base_thread}:chat" if scope == "task" else base_thread
-    return {"configurable": {"thread_id": thread_id}}
+def _resolve_conversation(user: dict, conversation_id: str, *, fallback_title: str = "") -> tuple[str, dict]:
+    """conversation_id를 검증·생성하고 (정규화된 cid, graph config) 튜플을 반환."""
+    user_id = str(user.get("user_id") or user.get("email"))
+    cid = (conversation_id or "").strip()
+    if cid and not get_conversation(user_id, cid):
+        cid = ""
+    if not cid:
+        cid = create_conversation(user_id, title=(fallback_title or "(새 대화)"))
+    thread_id = derive_thread_id(user_id, cid)
+    return cid, {"configurable": {"thread_id": thread_id}}
 
 
 def _extract_file_to_text(content: bytes, filename: str) -> tuple[str, dict]:
@@ -503,10 +593,15 @@ def _extract_file_to_text(content: bytes, filename: str) -> tuple[str, dict]:
 
 
 @app.post("/upload")
-async def upload_file(request: Request, file: UploadFile = File(...)):
+async def upload_file(
+    request: Request,
+    file: UploadFile = File(...),
+    conversation_id: str = Form(""),
+):
     """파일만 첨부 시: 텍스트 추출 후 LLM 요약 반환."""
     user = get_current_user(request)
     require_approved_user(user)
+    user_id = str(user.get("user_id") or user.get("email"))
 
     suffix = os.path.splitext(file.filename or "")[1].lower()
     if suffix not in _UPLOAD_ALLOWED_SUFFIXES:
@@ -567,8 +662,13 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         except Exception as e:
             print(f"[UPLOAD] LLM 분석 실패: {type(e).__name__}: {e}")
 
+    cid, config = _resolve_conversation(
+        user,
+        conversation_id,
+        fallback_title=f"📎 {file.filename or '파일'}",
+    )
+
     try:
-        config = _get_chat_thread_config(user)
         graph_app.update_state(config, {
             "file_context": text.strip()[:_FILE_CONTEXT_MAX_CHARS],
             "file_context_name": file.filename,
@@ -576,7 +676,13 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         print(f"[UPLOAD] file_context State 저장 실패 (non-fatal): {e}")
 
-    return JSONResponse({"ok": True, "summary": summary, "text": text[:20000], "meta": meta})
+    return JSONResponse({
+        "ok":              True,
+        "summary":         summary,
+        "text":            text[:20000],
+        "meta":            meta,
+        "conversation_id": cid,
+    })
 
 
 @app.post("/chat-with-file")
@@ -584,10 +690,12 @@ async def chat_with_file(
     request: Request,
     file: UploadFile = File(...),
     message: str = Form(...),
+    conversation_id: str = Form(""),
 ):
     """파일 + 질문: 파일 내용을 컨텍스트로 LLM 답변 반환."""
     user = get_current_user(request)
     require_approved_user(user)
+    user_id = str(user.get("user_id") or user.get("email"))
     _ensure_llm_ready_or_503()
 
     if not message.strip():
@@ -642,8 +750,13 @@ async def chat_with_file(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM 호출 실패: {e}")
 
+    cid, config = _resolve_conversation(
+        user,
+        conversation_id,
+        fallback_title=(message[:30].strip() or f"📎 {file.filename or '파일'}"),
+    )
+
     try:
-        config = _get_chat_thread_config(user)
         graph_app.update_state(config, {
             "file_context": raw_text.strip()[:_FILE_CONTEXT_MAX_CHARS],
             "file_context_name": file.filename,
@@ -651,7 +764,14 @@ async def chat_with_file(
     except Exception as e:
         print(f"[CHAT-WITH-FILE] file_context State 저장 실패 (non-fatal): {e}")
 
-    return JSONResponse({"type": "file_qa", "answer": answer, "sources": []})
+    update_conversation(user_id, cid, increment_messages=2)
+
+    return JSONResponse({
+        "type":            "file_qa",
+        "answer":          answer,
+        "sources":         [],
+        "conversation_id": cid,
+    })
 
 
 @app.get("/favicon.ico")

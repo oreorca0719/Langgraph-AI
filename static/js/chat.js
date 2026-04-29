@@ -1,19 +1,5 @@
 // /static/js/chat.js
 
-// 새 대화 버튼
-document.getElementById('new-chat-btn').addEventListener('click', async () => {
-  await fetch('/chat/reset', { method: 'POST' });
-  chatBox.innerHTML = `
-    <div class="message bot">
-      <div class="bot-avatar"></div>
-      <div class="content">
-        <p class="message-title">Assistant</p>
-        안녕하세요.<br><br>저는 임직원의 업무 효율을 높이기 위해 도입된 사내 AI 어시스턴트입니다.<br><br>어떤 도움이 필요하신가요?
-      </div>
-    </div>`;
-  chatBox.scrollTop = 0;
-});
-
 const chatBox   = document.getElementById('chat-box');
 const userInput = document.getElementById('user-input');
 const sendBtn   = document.getElementById('send-btn');
@@ -22,6 +8,25 @@ const fileInput = document.getElementById('file-input');
 const fileBadge = document.getElementById('file-badge');
 
 let pendingFile = null;
+
+// ── 대화 식별자 ─────────────────────────────────────────
+const appShell = document.querySelector('.app-shell');
+let conversationId = (appShell && appShell.dataset.conversationId) || '';
+
+function setConversationId(cid) {
+  conversationId = cid || '';
+  if (appShell) appShell.dataset.conversationId = conversationId;
+  if (conversationId) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('cid', conversationId);
+    window.history.replaceState({}, '', url.toString());
+  }
+}
+
+// 새 대화 버튼: 단순 네비게이션 (cid 없이 /chat 진입)
+document.getElementById('new-chat-btn').addEventListener('click', () => {
+  window.location.href = '/chat';
+});
 
 // ── 파일 첨부 ──────────────────────────────────────────
 attachBtn.addEventListener('click', () => fileInput.click());
@@ -183,6 +188,7 @@ async function send() {
     try {
       const form = new FormData();
       form.append('file', file);
+      if (conversationId) form.append('conversation_id', conversationId);
 
       let endpoint = '/upload';
       if (message) {
@@ -198,6 +204,8 @@ async function send() {
       removeLoading(loadingId);
 
       if (!res.ok) throw new Error(data?.detail || '처리 실패');
+
+      if (data?.conversation_id) setConversationId(data.conversation_id);
 
       let mdText;
       if (data.type === 'file_qa') {
@@ -221,10 +229,13 @@ async function send() {
 
   // ── 텍스트 전용 → /chat ───────────────────────────────
   try {
+    const body = { message };
+    if (conversationId) body.conversation_id = conversationId;
+
     const res = await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(body),
     });
 
     if (res.redirected) { window.location.href = res.url; return; }
@@ -239,6 +250,8 @@ async function send() {
     removeLoading(loadingId);
 
     if (!res.ok) throw new Error(data?.detail || data?.message || JSON.stringify(data));
+
+    if (data?.conversation_id) setConversationId(data.conversation_id);
 
     let markdownText = '';
     if (data.type === 'interrupt') {
@@ -296,3 +309,33 @@ sendBtn.addEventListener('click', send);
 userInput.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') send();
 });
+
+// ── 서버 임베드 히스토리 렌더링 ─────────────────────────
+(function renderInitialHistory() {
+  const dataEl = document.getElementById('conv-history-data');
+  if (!dataEl) return;
+  let history;
+  try {
+    history = JSON.parse(dataEl.textContent || '[]');
+  } catch {
+    return;
+  }
+  if (!Array.isArray(history) || history.length === 0) return;
+
+  for (const m of history) {
+    const role = m?.role;
+    const content = (m?.content ?? '').toString();
+    if (!content) continue;
+    if (role === 'user') {
+      chatBox.innerHTML += `<div class="message user">${escapeHtml(content)}</div>`;
+    } else if (role === 'assistant') {
+      const html = marked.parse(escapeTilde(content));
+      chatBox.innerHTML += `
+        <div class="message bot">
+          <div class="bot-avatar"></div>
+          <div class="content">${html}</div>
+        </div>`;
+    }
+  }
+  chatBox.scrollTop = chatBox.scrollHeight;
+})();
