@@ -107,6 +107,11 @@ def router_node(state: GraphState) -> dict:
             "decision_path": ["router:empty_input"],
         }
 
+    # original_input anchor 초기화 (첫 진입 시 1회. replan으로 회귀해도 보존됨)
+    original_init: dict = {}
+    if not (state.original_input or "").strip():
+        original_init["original_input"] = user_input
+
     parsed = _call_router_llm(user_input)
     decision = (parsed.get("routing_decision") or "single_retrieval").strip()
     qtype = (parsed.get("question_type") or "reasoning").strip()
@@ -148,6 +153,7 @@ def router_node(state: GraphState) -> dict:
         "sub_questions": subs,
         "llm_call_count": state.llm_call_count + 1,
         "decision_path": [f"router:{decision}/{qtype}"],
+        **original_init,
     }
 
 

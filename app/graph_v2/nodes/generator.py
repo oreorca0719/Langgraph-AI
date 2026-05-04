@@ -113,14 +113,25 @@ def generator_node(state: GraphState) -> dict:
     docs: list[Document] = state.retrieved_docs or []
     user_input = (state.input_data or "").strip()
 
-    # docs 없으면 명시적 거절
+    # docs 없으면 명시적 거절. 시스템 로그는 두 케이스 분리:
+    #  (a) 처음부터 retrieve가 결과를 못 가져옴 — 사내 문서에 정말 없음 가능성
+    #  (b) rewrite 3회 후에도 못 찾음 — 시스템 회복 실패
+    # 사용자 응답은 동일.
     if not docs:
         msg = "관련 사내 문서를 찾을 수 없습니다. 다른 키워드로 검색해 보시거나 담당 부서에 문의해 주세요."
+        path = state.decision_path or []
+        exhausted = any("exhausted_after_3rewrites" in p for p in path)
+        if exhausted:
+            print("[GENERATOR] no_docs (retrieve exhausted after 3 rewrites)")
+            log_label = "generate:no_docs(exhausted)"
+        else:
+            print("[GENERATOR] no_docs (initial empty retrieve)")
+            log_label = "generate:no_docs(initial)"
         return {
             "answer": msg,
             "citations": [],
             "messages": [HumanMessage(content=user_input), AIMessage(content=msg)],
-            "decision_path": ["generate:no_docs"],
+            "decision_path": [log_label],
         }
 
     qtype = state.question_type or "reasoning"

@@ -76,6 +76,7 @@ class GraphState(BaseModel):
 
     # ─── 입력 ───────────────────────────────────────────────
     input_data: str = ""
+    original_input: str = ""        # rewrite 시에도 불변 (drift 방지 anchor, router에서 1회 초기화)
     input_embedding: Optional[list[float]] = None  # 한 번 계산 후 재사용
     trace_id: str = ""
 
