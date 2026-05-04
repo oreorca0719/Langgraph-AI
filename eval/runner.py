@@ -1,0 +1,222 @@
+"""
+평가 runner — 250문항을 현재 시스템에 던지고 응답을 수집한다.
+
+직접 graph_app.invoke를 호출 (HTTP /chat 거치지 않음). 각 질문은 독립 thread_id로
+실행하여 대화 누적의 영향을 차단한다.
+
+출력: eval/results/<run_name>.json
+각 결과 객체:
+{
+  "id": int,
+  "question": str,
+  "answer": str,           # 시스템 응답
+  "task_type": str,        # 라우팅 결정
+  "task_args": dict,       # 라우팅 디버그 + 검색 docs 메타
+  "citations": [...],      # citations_used
+  "elapsed_sec": float,
+  "error": str | null
+}
+
+Usage:
+    GEMINI_API_KEY=... python eval/runner.py --run-name baseline
+    GEMINI_API_KEY=... python eval/runner.py --run-name baseline --limit 10  # smoke test
+    GEMINI_API_KEY=... python eval/runner.py --run-name lever3_prompt --categories A,B
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import uuid
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+EVAL_DIR = Path(__file__).parent
+DATA_DIR = EVAL_DIR / "data"
+RESULTS_DIR = EVAL_DIR / "results"
+QUESTIONS_FILE = DATA_DIR / "questions.json"
+
+
+def build_graph_app():
+    """main.py의 그래프 구성을 재사용. 단, DynamoDB 체크포인터를 InMemorySaver로 교체.
+    이유: 평가 실행 시 외부 의존성(AWS) 회피 + thread 고립 보장."""
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    # DynamoDB 의존성 회피: import 전 환경변수 강제
+    os.environ.setdefault("CREATE_USERS_TABLE", "0")
+    os.environ.setdefault("CREATE_INTENT_SAMPLES_TABLE", "0")
+    os.environ.setdefault("CREATE_ROUTING_LOG_TABLE", "0")
+
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, StateGraph
+    from app.graph.states.state import GraphState
+    from app.graph.nodes.input_guard import input_guard_node
+    from app.graph.nodes.task_router import (
+        task_router_node, route_by_task, rejection_node, route_after_input_guard,
+    )
+    from app.graph.nodes.clarification import (
+        clarification_slot_node, clarification_confirm_node, route_after_clarification,
+    )
+    from app.graph.nodes.knowledge_search import (
+        search_node, quality_check_node, route_after_quality, rewrite_node, answer_node,
+    )
+    from app.graph.nodes.detail_search import detail_search_node
+    from app.graph.nodes.ai_guide import ai_guide_node
+    from app.graph.nodes.file_chat import file_chat_node
+
+    workflow = StateGraph(GraphState)
+    workflow.add_node("input_guard",          input_guard_node)
+    workflow.add_node("task_router",          task_router_node)
+    workflow.add_node("clarification",         clarification_slot_node)
+    workflow.add_node("clarification_confirm", clarification_confirm_node)
+    workflow.add_node("rejection",             rejection_node)
+    workflow.add_node("search",                search_node)
+    workflow.add_node("quality_check",         quality_check_node)
+    workflow.add_node("rewrite",               rewrite_node)
+    workflow.add_node("answer",                answer_node)
+    workflow.add_node("ai_guide",              ai_guide_node)
+    workflow.add_node("file_chat",             file_chat_node)
+    workflow.add_node("detail_search",         detail_search_node)
+
+    workflow.set_entry_point("input_guard")
+    workflow.add_conditional_edges(
+        "input_guard", route_after_input_guard,
+        {"rejection": "rejection", "task_router": "task_router"},
+    )
+    workflow.add_conditional_edges(
+        "task_router", route_by_task,
+        {"knowledge_search": "search", "detail_search": "detail_search",
+         "ai_guide": "ai_guide", "file_chat": "file_chat",
+         "rejection": "rejection", "clarification": "clarification"},
+    )
+    workflow.add_conditional_edges(
+        "clarification", route_after_clarification,
+        {"rejection": "rejection", "task_router": "task_router",
+         "knowledge_search": "search", "clarification_confirm": "clarification_confirm"},
+    )
+    workflow.add_edge("clarification_confirm", "task_router")
+    workflow.add_edge("search", "quality_check")
+    workflow.add_conditional_edges(
+        "quality_check", route_after_quality,
+        {"answer": "answer", "rewrite": "rewrite"},
+    )
+    workflow.add_edge("rewrite", "search")
+    workflow.add_edge("detail_search", "answer")
+    workflow.add_edge("answer", END)
+    workflow.add_edge("ai_guide", END)
+    workflow.add_edge("file_chat", END)
+    workflow.add_edge("rejection", END)
+
+    return workflow.compile(checkpointer=InMemorySaver())
+
+
+def extract_text(content) -> str:
+    """LangChain message.content가 list / str / dict 형태일 때 안전 추출."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, dict):
+                parts.append(p.get("text", ""))
+            else:
+                parts.append(str(p))
+        return "".join(parts)
+    return str(content)
+
+
+def run_one(graph_app, q: dict) -> dict:
+    """단일 질문 실행. 신규 thread_id로 매번 격리."""
+    thread_id = f"eval-{uuid.uuid4().hex[:12]}"
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 15}
+    inputs = {
+        "trace_id": thread_id,
+        "input_data": q["question"],
+        "task_args": {},
+        "retry_count": 0,
+        "pending_confirm_msg": "",
+    }
+
+    t0 = time.perf_counter()
+    try:
+        result = graph_app.invoke(inputs, config=config)
+        elapsed = time.perf_counter() - t0
+
+        msgs = result.get("messages") or []
+        answer_text = extract_text(msgs[-1].content) if msgs else ""
+
+        return {
+            "id": q["id"],
+            "category": q["category"],
+            "question": q["question"],
+            "answer": answer_text,
+            "task_type": result.get("task_type", ""),
+            "routing_debug": (result.get("task_args") or {}).get("routing_debug", {}),
+            "retry_count": result.get("retry_count", 0),
+            "citations": result.get("citations_used") or [],
+            "elapsed_sec": round(elapsed, 3),
+            "error": None,
+        }
+    except Exception as e:
+        return {
+            "id": q["id"],
+            "category": q["category"],
+            "question": q["question"],
+            "answer": "",
+            "task_type": "",
+            "routing_debug": {},
+            "retry_count": 0,
+            "citations": [],
+            "elapsed_sec": round(time.perf_counter() - t0, 3),
+            "error": f"{type(e).__name__}: {e}",
+        }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--run-name", required=True, help="결과 파일명 (예: baseline)")
+    parser.add_argument("--categories", help="콤마구분 (A,B,C)")
+    parser.add_argument("--limit", type=int, help="앞에서 N개만 (smoke test)")
+    parser.add_argument("--sleep", type=float, default=0.0, help="질의 간 sleep (rate limit)")
+    args = parser.parse_args()
+
+    questions = json.loads(QUESTIONS_FILE.read_text(encoding="utf-8"))
+    if args.categories:
+        cats = set(args.categories.split(","))
+        questions = [q for q in questions if q["category"] in cats]
+    if args.limit:
+        questions = questions[: args.limit]
+
+    print(f"Building graph app...")
+    graph_app = build_graph_app()
+    print(f"Running {len(questions)} questions...")
+
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = RESULTS_DIR / f"{args.run_name}.json"
+
+    results: list[dict] = []
+    for idx, q in enumerate(questions, 1):
+        r = run_one(graph_app, q)
+        results.append(r)
+        status = "ERR" if r["error"] else "OK"
+        print(f"[{idx}/{len(questions)}] Q{q['id']} ({q['category']}) "
+              f"{r['elapsed_sec']:.2f}s {r['task_type']} {status}")
+        if args.sleep:
+            time.sleep(args.sleep)
+
+        # 진행 상황 incremental 저장 (장시간 실행 중 중단 대비)
+        if idx % 10 == 0 or idx == len(questions):
+            out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    err_count = sum(1 for r in results if r["error"])
+    print(f"\nDone. {len(results)} results saved to {out_path}")
+    print(f"  - Errors: {err_count}")
+    print(f"  - Avg elapsed: {sum(r['elapsed_sec'] for r in results) / max(len(results), 1):.2f}s")
+
+
+if __name__ == "__main__":
+    main()
