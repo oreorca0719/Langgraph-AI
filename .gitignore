@@ -28,6 +28,10 @@ test_result.json
 eval/results/
 eval/data/sources/
 
+# 평가 분석 시 derive 되는 ID 목록
+eval/data/correct_ids.txt
+eval/data/failure_ids.txt
+
 # AWS CLI 일시 작업 디렉토리 (IAM policy 임시 파일 등)
 _aws_tmp/
 

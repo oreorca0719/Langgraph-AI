@@ -226,13 +226,25 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-name", required=True, help="결과 파일명 (예: baseline)")
     parser.add_argument("--categories", help="콤마구분 (A,B,C)")
+    parser.add_argument("--ids", help="콤마구분 question id (예: 5,26,41,60). categories와 함께면 OR")
+    parser.add_argument("--ids-file", help="줄 또는 콤마 구분 id 목록 파일")
     parser.add_argument("--limit", type=int, help="앞에서 N개만 (smoke test)")
     parser.add_argument("--sleep", type=float, default=0.0, help="질의 간 sleep (rate limit)")
     parser.add_argument("--version", default="v1", choices=["v1", "v2"], help="그래프 버전")
     args = parser.parse_args()
 
     questions = json.loads(QUESTIONS_FILE.read_text(encoding="utf-8"))
-    if args.categories:
+    target_ids: set[int] | None = None
+    if args.ids:
+        target_ids = {int(x) for x in args.ids.split(",") if x.strip()}
+    if args.ids_file:
+        from pathlib import Path as _P
+        text = _P(args.ids_file).read_text(encoding="utf-8")
+        ids_from_file = {int(x) for x in text.replace(",", "\n").split() if x.strip().isdigit()}
+        target_ids = (target_ids or set()) | ids_from_file
+    if target_ids:
+        questions = [q for q in questions if q["id"] in target_ids]
+    elif args.categories:
         cats = set(args.categories.split(","))
         questions = [q for q in questions if q["category"] in cats]
     if args.limit:

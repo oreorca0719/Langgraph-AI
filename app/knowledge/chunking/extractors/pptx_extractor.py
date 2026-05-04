@@ -54,6 +54,9 @@ def extract_pptx(path: Path) -> list[PageUnit]:
     각 슬라이드:
       1. 본문 PageUnit 생성 (제목 + body shapes 텍스트 + 노트)
       2. 슬라이드 안의 모든 표는 별도 PageUnit으로 분리 (parent_page_index 부착)
+      3. 슬라이드에 의미있는 text shape가 3개 이상이면 각 shape 별 sub-chunk 추가
+         → "한 슬라이드 안 여러 항목" 케이스에서 retrieve 정밀도 향상
+         (예: Slide 27 의 IT프로/수요기업/공급기업 3개 카테고리 → 3개 sub-chunk)
 
     section_path: PART N 헤더가 슬라이드 본문에 나오면 갱신, 다음 슬라이드까지 유지.
     """
@@ -95,6 +98,14 @@ def extract_pptx(path: Path) -> list[PageUnit]:
                 body_parts.append(text)
 
         body_text = "\n\n".join(body_parts).strip()
+
+        # ─── 의미있는 sub-chunk 후보 추출 ───
+        # 너무 짧은 (<20자) shape 는 단편적이라 제외, 너무 긴 (>500자) shape 는 어차피
+        # 본문 chunk 로 충분. 20~500자 shape 가 3개+ 일 때만 sub-chunk 생성.
+        sub_chunk_candidates = [
+            p.strip() for p in body_parts if 20 <= len(p.strip()) <= 500
+        ]
+        emit_sub_chunks = len(sub_chunk_candidates) >= 3
 
         # ─── 3. 발표자 노트 ───────────────────────────────
         notes_text = ""
@@ -149,5 +160,28 @@ def extract_pptx(path: Path) -> list[PageUnit]:
                 parent_page_index=slide_idx,  # 본문 슬라이드와 연결
                 raw_metadata={"row_count": len(rows)},
             ))
+
+        # ─── 7. Shape 단위 sub-chunk (>=3개 의미있는 shape 인 슬라이드만) ─────
+        # 목적: 한 슬라이드 안 여러 항목 (예: IT프로/수요기업/공급기업) 을 별도 chunk 로
+        #       retrieve 가 특정 항목만 정밀하게 가져올 수 있게 함. co-retrieval 로
+        #       sibling sub-chunks 함께 fetch 가능해서 컨텍스트 손실 없음.
+        if emit_sub_chunks:
+            for sub_i, sub_text in enumerate(sub_chunk_candidates, start=1):
+                # parent slide 와 결합한 chunk_id 충돌 회피용 unit_index
+                sub_idx = slide_idx * 1000 + 100 + sub_i  # table (1000+1~99) 와 충돌 방지 (+100 부터)
+                units.append(PageUnit(
+                    unit_index=sub_idx,
+                    unit_type="slide_subchunk",
+                    title=f"{title} — 항목 {sub_i}" if title else f"슬라이드 {slide_idx} 항목 {sub_i}",
+                    section_path=current_section,
+                    text=sub_text,
+                    is_table=False,
+                    table_index=None,
+                    parent_page_index=slide_idx,  # 본문 슬라이드와 연결
+                    raw_metadata={
+                        "sub_chunk_index": sub_i,
+                        "total_sub_chunks": len(sub_chunk_candidates),
+                    },
+                ))
 
     return units

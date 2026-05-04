@@ -67,6 +67,86 @@ def _check_no_info_misclaim(answer: str, docs: list[Document]) -> bool:
 
 
 # ────────────────────────────────────────────────────────────
+# list_n 전용 검증 (regex/substring 기반, LLM 호출 없음)
+# ────────────────────────────────────────────────────────────
+
+# 질문에서 N 명시 추출: "3가지", "4개", "5단계", "두 가지", "세 곳" 등
+_N_HANGUL_MAP = {"한": 1, "두": 2, "세": 3, "네": 4, "다섯": 5, "여섯": 6, "일곱": 7,
+                 "여덟": 8, "아홉": 9, "열": 10}
+_N_PATTERNS = [
+    re.compile(r"(\d{1,2})\s*(?:가지|개|단계|곳|명|항목|요소|축|영역)"),
+    re.compile(r"(한|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*(?:가지|개|단계|곳|명|항목|요소|축|영역)"),
+]
+
+
+def _extract_expected_n(question: str) -> int | None:
+    """질문에서 명시된 N 추출. 없으면 None."""
+    if not question:
+        return None
+    for pat in _N_PATTERNS:
+        m = pat.search(question)
+        if m:
+            v = m.group(1)
+            if v.isdigit():
+                return int(v)
+            return _N_HANGUL_MAP.get(v)
+    return None
+
+
+def _extract_list_items(answer: str) -> list[str]:
+    """답변에서 list 항목 추출 (불릿/줄바꿈 단위)."""
+    if not answer:
+        return []
+    items = []
+    for line in answer.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # 불릿/번호 prefix 제거
+        line = re.sub(r"^[\s•·\-\*\d.)\]\[]+", "", line).strip()
+        # citation 제거
+        line = re.sub(r"\s*\[\d{1,3}\]\s*", " ", line).strip()
+        if 2 <= len(line) <= 200:
+            items.append(line)
+    return items
+
+
+def _check_list_n_consistency(question: str, answer: str, docs: list[Document]) -> list[str]:
+    """list_n 답변 검증.
+
+    1. expected_n 명시되어 있으면 항목 수 일치 확인
+    2. 각 항목이 chunks 어딘가에 verbatim 또는 substantial substring 매칭되는지 확인 (환각 방지)
+    """
+    if not docs or not answer:
+        return []
+    issues: list[str] = []
+    items = _extract_list_items(answer)
+    if not items:
+        return []
+
+    # 1. expected_n 검증
+    n_required = _extract_expected_n(question)
+    if n_required and abs(len(items) - n_required) > 0:
+        issues.append(f"list_n 개수 불일치: 질문 {n_required}개 요구, 답변 {len(items)}개")
+
+    # 2. 각 항목이 chunks 에 등장하는지 (공백 무시 substring 매칭)
+    chunks_norm = re.sub(r"\s+", "", "\n".join(d.content or "" for d in docs)).lower()
+    for item in items[:15]:  # 너무 많으면 처음 15개만
+        item_norm = re.sub(r"\s+", "", item).lower()
+        # 너무 짧은 항목 (≤2자) 은 스킵 (false positive 위험)
+        if len(item_norm) < 3:
+            continue
+        if item_norm not in chunks_norm:
+            # 핵심 단어 (공백/특수문자 제외 6자 이상) 라도 매칭되는지 확인
+            core = re.sub(r"[^가-힣a-zA-Z0-9]", "", item)[:30]
+            if len(core) >= 4 and core.lower() not in chunks_norm:
+                issues.append(f"list_n 항목 '{item[:30]}' 검색 결과에 없음 (환각 의심)")
+                if len(issues) >= 5:
+                    break
+    return issues
+
+
+# ────────────────────────────────────────────────────────────
 # LLM-as-judge 검증 (groundedness, relevance, hallucination)
 # ────────────────────────────────────────────────────────────
 
@@ -128,6 +208,11 @@ def reflection_node(state: GraphState) -> dict:
     fact_issues = _check_facts_in_chunks(answer, docs)
     no_info_misclaim = _check_no_info_misclaim(answer, docs)
 
+    # list_n 전용 검증 (해당 qtype 만)
+    list_n_issues: list[str] = []
+    if (state.question_type or "").lower() == "list_n":
+        list_n_issues = _check_list_n_consistency(state.input_data, answer, docs)
+
     # LLM-as-judge (chunks가 있을 때만)
     if docs and answer and not answer.startswith("관련 사내 문서를 찾을 수 없"):
         judge = _call_reflection_llm(state.input_data, answer, docs)
@@ -141,13 +226,15 @@ def reflection_node(state: GraphState) -> dict:
         groundedness, relevance, hallucination_risk, llm_passed = 1.0, 1.0, 0.0, True
         llm_calls_added = 0
 
-    # 종합 passed
+    # 종합 passed (list_n 환각·개수 불일치는 strict 처리)
     passed = (
         llm_passed
         and not no_info_misclaim
         and len(fact_issues) <= 2  # 수치 issue 최대 2개까지 관용
+        and len(list_n_issues) == 0  # list_n issue 는 0 만 허용
     )
 
+    fact_issues = list(fact_issues) + list(list_n_issues)
     verif = VerificationResult(
         groundedness=groundedness,
         relevance=relevance,

@@ -24,3 +24,6 @@ rank-bm25
 
 # Cross-encoder reranker (grader 대체)
 sentence-transformers
+
+# 한국어 형태소 분석기 (BM25 토크나이저)
+kiwipiepy

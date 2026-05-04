@@ -102,8 +102,47 @@ class ChromaHybridRetriever:
             self._bm25 = None
             self._bm25_docs = []
 
+    # 형태소 분석기 — lazy singleton (Kiwi 초기화 비용 ~1s)
+    _kiwi = None
+
+    @classmethod
+    def _get_kiwi(cls):
+        if cls._kiwi is None:
+            try:
+                from kiwipiepy import Kiwi  # type: ignore
+                cls._kiwi = Kiwi()
+            except ImportError:
+                # fallback — kiwipiepy 미설치 시 정규식 토크나이저
+                cls._kiwi = False
+        return cls._kiwi
+
+    # BM25 인덱싱·검색에 의미있는 품사만 유지
+    # NN* 명사, NP 대명사, SL/SH 외국어/한자, SN 숫자, VV/VA 동사/형용사 어간, XR 어근
+    _BM25_KEEP_TAGS = ("NN", "NP", "SL", "SH", "SN", "VV", "VA", "XR")
+
     def _tokenize(self, text: str) -> list[str]:
-        return re.findall(r"[가-힣a-zA-Z0-9]+", text.lower())
+        """한국어 형태소 분석 + 영숫자 추출.
+
+        조사·어미·문장부호 제거하여 BM25 매칭 정확도 향상:
+          "그레이트프로의 슬로건" → ["그레이트프로", "슬로건"] (조사 분리)
+          "교통·식비" → ["교통", "식비"] (구분자 분리)
+        """
+        if not text:
+            return []
+        kiwi = self._get_kiwi()
+        if kiwi is False:  # kiwipiepy 미설치 시 fallback
+            return re.findall(r"[가-힣a-zA-Z0-9]+", text.lower())
+        tokens = kiwi.tokenize(text)
+        out: list[str] = []
+        for t in tokens:
+            tag = t.tag or ""
+            if not any(tag.startswith(prefix) for prefix in self._BM25_KEEP_TAGS):
+                continue
+            form = (t.form or "").strip().lower()
+            if len(form) < 1:
+                continue
+            out.append(form)
+        return out
 
     def _semantic_search(self, query: str, k: int) -> list[tuple[LCDocument, float]]:
         # Chroma의 similarity_search_with_score는 distance 반환 (작을수록 유사)
