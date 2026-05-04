@@ -270,13 +270,12 @@ def auto_ingest_if_enabled() -> None:
                 print(f"[INGEST] 추출 결과 없음 {rel}")
                 continue
 
-            # metadata 부착 (LLM doc_topic + chunk_question_types 포함)
+            # metadata 부착 (LLM doc_topic만 — chunk_question_types는 폐기, Q&A cache로 대체)
             chunk_objs = tag_chunks(
                 units,
                 doc_id=doc_id,
                 doc_format=fmt,
                 enable_llm_doc_topic=True,
-                enable_llm_chunk_qtype=True,
             )
             if not chunk_objs:
                 print(f"[INGEST] 태깅 결과 없음 {rel}")

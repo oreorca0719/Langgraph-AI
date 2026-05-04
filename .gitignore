@@ -24,6 +24,10 @@ uvicorn.log
 # 테스트 결과
 test_result.json
 
+# 평가 실행 산출물 (재실행 시 재생성)
+eval/results/
+eval/data/sources/
+
 # Claude Code 설정
 .claude/
 

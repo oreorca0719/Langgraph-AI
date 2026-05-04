@@ -33,6 +33,7 @@ from app.core.config import get_llm
 from app.graph_v2.states.state import GraphState
 from app.graph_v2.nodes.security import security_gate_node, route_after_security
 from app.graph_v2.nodes.router import router_node, route_by_decision
+from app.graph_v2.nodes.qa_lookup import qa_lookup_node, route_after_qa_lookup
 from app.graph_v2.subgraphs.retrieve import build_retrieve_subgraph
 from app.graph_v2.subgraphs.generate import build_generate_subgraph
 
@@ -143,6 +144,7 @@ def build_main_graph(checkpointer=None):
     # Nodes
     g.add_node("security_gate", security_gate_node)
     g.add_node("router", router_node)
+    g.add_node("qa_lookup", qa_lookup_node)
     g.add_node("retrieve", retrieve_sub)
     g.add_node("generate", generate_sub)
     g.add_node("replan_reset", _replan_reset_node)
@@ -158,6 +160,7 @@ def build_main_graph(checkpointer=None):
         "security_gate", route_after_security,
         {"rejected": "rejected", "router": "router"},
     )
+    # router → retrieve 경로는 qa_lookup을 먼저 거침 (캐시 hit 시 retrieve 스킵)
     g.add_conditional_edges(
         "router", route_by_decision,
         {
@@ -165,8 +168,12 @@ def build_main_graph(checkpointer=None):
             "no_retrieval_answer": "no_retrieval_answer",
             "ai_guide": "ai_guide",
             "file_chat": "file_chat",
-            "retrieve": "retrieve",
+            "retrieve": "qa_lookup",
         },
+    )
+    g.add_conditional_edges(
+        "qa_lookup", route_after_qa_lookup,
+        {"end": END, "retrieve": "retrieve"},
     )
     g.add_edge("retrieve", "generate")
 

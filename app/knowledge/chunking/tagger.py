@@ -8,7 +8,7 @@ Tagger — 청킹된 PageUnit에 metadata 부착 (코드 + LLM).
 
 LLM metadata:
   - doc_topic (문서당 1회)
-  - chunk_question_types (chunk당 1회)
+  (chunk_question_types는 폐기 — Q&A cache retrieval로 대체)
 """
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ from pathlib import Path
 
 from app.knowledge.chunking.page_unit import Chunk, PageUnit
 from app.knowledge.chunking.doc_topic_classifier import classify_doc_topic
-from app.knowledge.chunking.chunk_qtype_classifier import classify_chunk_qtypes
 
 
 # ────────────────────────────────────────────────────────────
@@ -70,7 +69,6 @@ def tag_chunks(
     doc_id: str,
     doc_format: str,
     enable_llm_doc_topic: bool = True,
-    enable_llm_chunk_qtype: bool = True,
 ) -> list[Chunk]:
     """
     PageUnit list → Chunk list (metadata 완전 부착).
@@ -78,7 +76,7 @@ def tag_chunks(
     1. doc_topic 1회 분류 (LLM, enable_llm_doc_topic=True 시)
     2. 각 unit별:
         - 코드 metadata (위치/구조/entities)
-        - chunk_question_types (LLM, enable_llm_chunk_qtype=True 시)
+       (chunk_question_types는 폐기 — Q&A cache retrieval로 대체)
     """
     if not units:
         return []
@@ -94,10 +92,6 @@ def tag_chunks(
     for u in units:
         # entities (코드)
         entities = extract_entities(u.text)
-        # qtypes (LLM)
-        qtypes: list[str] = []
-        if enable_llm_chunk_qtype and u.text:
-            qtypes = classify_chunk_qtypes(u.text)
 
         chunk_id = f"file::{doc_id}::page_{u.unit_index}"
         if u.is_table:
@@ -126,7 +120,6 @@ def tag_chunks(
             "entities": " ".join(entities),
             # LLM metadata
             "doc_topic": doc_topic,
-            "chunk_question_types": ",".join(qtypes),
             # 기존 v1 호환 필드
             "title": u.title or doc_id,
             "display_source": doc_id,

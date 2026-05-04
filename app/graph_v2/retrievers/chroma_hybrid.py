@@ -187,7 +187,6 @@ class ChromaHybridRetriever:
                 "table_index": md.get("table_index"),
                 "parent_page_index": md.get("parent_page_index"),
                 "entities": md.get("entities", ""),
-                "chunk_question_types": md.get("chunk_question_types", ""),
                 "location": location,
             },
         )
@@ -260,28 +259,25 @@ class ChromaHybridRetriever:
         self,
         docs: list[Document],
         query_doc_topic: str | None = None,
-        query_qtype: str | None = None,
     ) -> list[Document]:
-        """query의 doc_topic / question_type과 일치하는 chunks score boost."""
+        """query의 doc_topic과 일치하는 chunks score boost.
+
+        chunk_question_types boost는 폐기 — Q&A cache retrieval로 대체.
+        """
         if not docs:
+            return docs
+        if not query_doc_topic:
             return docs
         boosted: list[Document] = []
         for d in docs:
             score = d.score
-            # doc_topic 일치 boost
-            if query_doc_topic and d.metadata.get("doc_topic") == query_doc_topic:
+            if d.metadata.get("doc_topic") == query_doc_topic:
                 score = min(1.0, score + 0.15)
-            # qtype 일치 boost
-            if query_qtype:
-                chunk_qtypes = (d.metadata.get("chunk_question_types") or "").split(",")
-                if query_qtype in chunk_qtypes:
-                    score = min(1.0, score + 0.10)
             boosted.append(Document(
                 content=d.content,
                 source=d.source,
                 score=score,
                 metadata=d.metadata,
             ))
-        # score 내림차순 재정렬
         boosted.sort(key=lambda x: x.score, reverse=True)
         return boosted
