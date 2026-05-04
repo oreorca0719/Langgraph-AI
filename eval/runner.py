@@ -40,9 +40,12 @@ RESULTS_DIR = EVAL_DIR / "results"
 QUESTIONS_FILE = DATA_DIR / "questions.json"
 
 
-def build_graph_app():
-    """main.py의 그래프 구성을 재사용. 단, DynamoDB 체크포인터를 InMemorySaver로 교체.
-    이유: 평가 실행 시 외부 의존성(AWS) 회피 + thread 고립 보장."""
+def build_graph_app(version: str = "v1"):
+    """그래프 빌더. v1 또는 v2 선택 가능.
+
+    v1: 기존 13-노드 플랫 그래프 (main.py에서 재구성)
+    v2: 새 아키텍처 (app/graph_v2/builder.py)
+    """
     from dotenv import load_dotenv
     load_dotenv()
 
@@ -50,6 +53,13 @@ def build_graph_app():
     os.environ.setdefault("CREATE_USERS_TABLE", "0")
     os.environ.setdefault("CREATE_INTENT_SAMPLES_TABLE", "0")
     os.environ.setdefault("CREATE_ROUTING_LOG_TABLE", "0")
+
+    if version == "v2":
+        from langgraph.checkpoint.memory import InMemorySaver
+        from app.graph_v2.builder import build_main_graph
+        return build_main_graph(checkpointer=InMemorySaver())
+
+    # v1 (기존)
 
     from langgraph.checkpoint.memory import InMemorySaver
     from langgraph.graph import END, StateGraph
@@ -129,38 +139,74 @@ def extract_text(content) -> str:
     return str(content)
 
 
-def run_one(graph_app, q: dict) -> dict:
+def run_one(graph_app, q: dict, version: str = "v1") -> dict:
     """단일 질문 실행. 신규 thread_id로 매번 격리."""
     thread_id = f"eval-{uuid.uuid4().hex[:12]}"
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 15}
-    inputs = {
-        "trace_id": thread_id,
-        "input_data": q["question"],
-        "task_args": {},
-        "retry_count": 0,
-        "pending_confirm_msg": "",
-    }
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 25}
+    if version == "v2":
+        inputs = {
+            "trace_id": thread_id,
+            "input_data": q["question"],
+        }
+    else:
+        inputs = {
+            "trace_id": thread_id,
+            "input_data": q["question"],
+            "task_args": {},
+            "retry_count": 0,
+            "pending_confirm_msg": "",
+        }
 
     t0 = time.perf_counter()
     try:
         result = graph_app.invoke(inputs, config=config)
         elapsed = time.perf_counter() - t0
 
-        msgs = result.get("messages") or []
-        answer_text = extract_text(msgs[-1].content) if msgs else ""
-
-        return {
-            "id": q["id"],
-            "category": q["category"],
-            "question": q["question"],
-            "answer": answer_text,
-            "task_type": result.get("task_type", ""),
-            "routing_debug": (result.get("task_args") or {}).get("routing_debug", {}),
-            "retry_count": result.get("retry_count", 0),
-            "citations": result.get("citations_used") or [],
-            "elapsed_sec": round(elapsed, 3),
-            "error": None,
-        }
+        # v2와 v1 결과 구조 차이 흡수
+        if version == "v2":
+            # v2: result는 dict (Pydantic을 dump한 형태)
+            answer_text = result.get("answer", "")
+            if not answer_text:
+                msgs = result.get("messages") or []
+                answer_text = extract_text(msgs[-1].content) if msgs else ""
+            task_type = result.get("routing_decision", "")
+            decision_path = result.get("decision_path", [])
+            citations = result.get("citations") or []
+            # Citation 객체를 dict로
+            citations = [
+                (c.dict() if hasattr(c, "dict") else c)
+                for c in citations
+            ]
+            return {
+                "id": q["id"],
+                "category": q["category"],
+                "question": q["question"],
+                "answer": answer_text,
+                "task_type": task_type,
+                "question_type": result.get("question_type", ""),
+                "decision_path": decision_path,
+                "citations": citations,
+                "retrieval_iterations": result.get("retrieval_iterations", 0),
+                "replan_iterations": result.get("replan_iterations", 0),
+                "llm_call_count": result.get("llm_call_count", 0),
+                "elapsed_sec": round(elapsed, 3),
+                "error": None,
+            }
+        else:
+            msgs = result.get("messages") or []
+            answer_text = extract_text(msgs[-1].content) if msgs else ""
+            return {
+                "id": q["id"],
+                "category": q["category"],
+                "question": q["question"],
+                "answer": answer_text,
+                "task_type": result.get("task_type", ""),
+                "routing_debug": (result.get("task_args") or {}).get("routing_debug", {}),
+                "retry_count": result.get("retry_count", 0),
+                "citations": result.get("citations_used") or [],
+                "elapsed_sec": round(elapsed, 3),
+                "error": None,
+            }
     except Exception as e:
         return {
             "id": q["id"],
@@ -182,6 +228,7 @@ def main() -> None:
     parser.add_argument("--categories", help="콤마구분 (A,B,C)")
     parser.add_argument("--limit", type=int, help="앞에서 N개만 (smoke test)")
     parser.add_argument("--sleep", type=float, default=0.0, help="질의 간 sleep (rate limit)")
+    parser.add_argument("--version", default="v1", choices=["v1", "v2"], help="그래프 버전")
     args = parser.parse_args()
 
     questions = json.loads(QUESTIONS_FILE.read_text(encoding="utf-8"))
@@ -191,20 +238,20 @@ def main() -> None:
     if args.limit:
         questions = questions[: args.limit]
 
-    print(f"Building graph app...")
-    graph_app = build_graph_app()
-    print(f"Running {len(questions)} questions...")
+    print(f"Building graph app (version={args.version})...", flush=True)
+    graph_app = build_graph_app(version=args.version)
+    print(f"Running {len(questions)} questions...", flush=True)
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     out_path = RESULTS_DIR / f"{args.run_name}.json"
 
     results: list[dict] = []
     for idx, q in enumerate(questions, 1):
-        r = run_one(graph_app, q)
+        r = run_one(graph_app, q, version=args.version)
         results.append(r)
         status = "ERR" if r["error"] else "OK"
         print(f"[{idx}/{len(questions)}] Q{q['id']} ({q['category']}) "
-              f"{r['elapsed_sec']:.2f}s {r['task_type']} {status}")
+              f"{r['elapsed_sec']:.2f}s {r['task_type']} {status}", flush=True)
         if args.sleep:
             time.sleep(args.sleep)
 
