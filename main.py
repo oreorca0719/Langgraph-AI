@@ -18,26 +18,15 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from langgraph.graph import END, StateGraph
-from langgraph.types import Command
 from app.checkpointer.dynamo_checkpointer import DynamoDBCheckpointer, ensure_checkpoints_table
 
 from app.core.config import has_gemini_api_key
-from app.graph.states.state import GraphState
-from app.graph.nodes.input_guard import input_guard_node
-from app.graph.nodes.task_router import task_router_node, route_by_task, rejection_node, route_after_input_guard
-from app.graph.nodes.clarification import (
-    clarification_slot_node, clarification_confirm_node, route_after_clarification,
-)
-from app.graph.nodes.knowledge_search import (
-    search_node, quality_check_node, route_after_quality, rewrite_node, answer_node,
-)
-from app.graph.nodes.detail_search import detail_search_node
-from app.graph.nodes.ai_guide import ai_guide_node
-from app.graph.nodes.file_chat import file_chat_node
 from app.security.content_sanitizer import sanitize as sanitize_content
 from app.security.output_validator import validate as validate_output
 from app.knowledge.ingest import auto_ingest_if_enabled
+
+# v2 그래프 — Phase G/H 작업 결과 (Q&A cache, reranker, list_n strict, rewrite negative feedback 등)
+from app.graph_v2.builder import build_main_graph
 
 # Auth (DynamoDB)
 from app.auth.deps import get_current_user, require_approved_user, require_admin_user
@@ -49,79 +38,15 @@ from app.auth.intent_samples import ensure_intent_samples_table, seed_intent_sam
 
 
 # =========================
-# LangGraph 구성 (플랫 그래프)
+# LangGraph v2 구성
 # =========================
+# v1 (clarification + detail_search) 기능은 v2 에서 미지원. 운영 단순화 우선.
+# - clarification (모호 질문 슬롯 묻기) → 제거
+# - detail_search (후속 심화 검색) → 제거
+# v2 가 가진 강점: Q&A cache bypass, cross-encoder reranker, list_n strict reflection,
+#                  rewrite negative feedback, reflection 기반 replan
 memory = DynamoDBCheckpointer()
-
-workflow = StateGraph(GraphState)
-
-# ── 노드 등록 ────────────────────────────────────────────────
-workflow.add_node("input_guard",          input_guard_node)
-workflow.add_node("task_router",          task_router_node)
-workflow.add_node("clarification",         clarification_slot_node)
-workflow.add_node("clarification_confirm", clarification_confirm_node)
-workflow.add_node("rejection",             rejection_node)
-workflow.add_node("search",                search_node)
-workflow.add_node("quality_check",         quality_check_node)
-workflow.add_node("rewrite",               rewrite_node)
-workflow.add_node("answer",                answer_node)
-workflow.add_node("ai_guide",              ai_guide_node)
-workflow.add_node("file_chat",             file_chat_node)
-workflow.add_node("detail_search",         detail_search_node)
-
-workflow.set_entry_point("input_guard")
-
-# ── 조건부 엣지 ──────────────────────────────────────────────
-workflow.add_conditional_edges(
-    "input_guard",
-    route_after_input_guard,
-    {"rejection": "rejection", "task_router": "task_router"},
-)
-
-workflow.add_conditional_edges(
-    "task_router",
-    route_by_task,
-    {
-        "knowledge_search": "search",
-        "detail_search":    "detail_search",
-        "ai_guide":         "ai_guide",
-        "file_chat":        "file_chat",
-        "rejection":        "rejection",
-        "clarification":    "clarification",
-    },
-)
-
-# clarification_slot → rejection / task_router / knowledge_search / clarification_confirm
-workflow.add_conditional_edges(
-    "clarification",
-    route_after_clarification,
-    {
-        "rejection":             "rejection",
-        "task_router":           "task_router",
-        "knowledge_search":      "search",          # 루프 방어 fallback 경로
-        "clarification_confirm": "clarification_confirm",  # 슬롯 수집 완료 → 확인 단계
-    },
-)
-# clarification_confirm → task_router (고정)
-workflow.add_edge("clarification_confirm", "task_router")
-
-# knowledge search 순환: search → quality_check → (answer | rewrite → search)
-workflow.add_edge("search", "quality_check")
-workflow.add_conditional_edges(
-    "quality_check",
-    route_after_quality,
-    {"answer": "answer", "rewrite": "rewrite"},
-)
-workflow.add_edge("rewrite", "search")
-
-# ── 종료 엣지 ────────────────────────────────────────────────
-workflow.add_edge("detail_search", "answer")
-workflow.add_edge("answer",      END)
-workflow.add_edge("ai_guide",    END)
-workflow.add_edge("file_chat",   END)
-workflow.add_edge("rejection",   END)
-
-graph_app = workflow.compile(checkpointer=memory)
+graph_app = build_main_graph(checkpointer=memory)
 set_graph_app(graph_app)
 
 
@@ -324,110 +249,47 @@ async def chat_endpoint(request: Request):
     thread_id = str(user.get("user_id") or user.get("email"))
     config    = {
         "configurable": {"thread_id": thread_id},
-        "recursion_limit": 15,
+        "recursion_limit": 25,
     }
 
-    # ── interrupt 재개 여부 확인 ──────────────────────────────
-    _INTERRUPT_NODES = {"clarification", "clarification_confirm"}
-    has_interrupt = False
-    try:
-        current_state = graph_app.get_state(config)
-        if current_state:
-            # 1차: tasks.interrupts 확인 (put_writes 정상 동작 시)
-            has_interrupt = any(t.interrupts for t in (current_state.tasks or []))
-            # 2차: state.next가 interrupt 노드 중 하나를 가리키면 interrupt 상태
-            if not has_interrupt:
-                has_interrupt = any(n in _INTERRUPT_NODES for n in (current_state.next or ()))
-    except Exception:
-        pass
+    # ── v2 그래프 실행 ────────────────────────────────────────
+    inputs = {
+        "trace_id":   trace_id,
+        "input_data": user_input,
+    }
+    result = graph_app.invoke(inputs, config=config)
 
-    # ── 그래프 실행 ───────────────────────────────────────────
-    if has_interrupt:
-        result = graph_app.invoke(Command(resume=user_input), config=config)
-    else:
-        inputs = {
-            "trace_id":           trace_id,
-            "input_data":         user_input,
-            "task_args":          {},
-            "retry_count":        0,    # 이전 검색 재시도 카운트 잔류 방지
-            "pending_confirm_msg": "",  # 이전 슬롯 확인 메시지 잔류 방지
-        }
-        result = graph_app.invoke(inputs, config=config)
-
-    # ── interrupt 발생 확인 (invoke 후) ───────────────────────
-    try:
-        new_state = graph_app.get_state(config)
-        pending = []
-        if new_state and new_state.tasks:
-            for task in new_state.tasks:
-                pending.extend(task.interrupts or [])
-    except Exception:
-        pending = []
-
-    # ── 폴백: tasks[].interrupts가 비어 있어도 state.next로 재감지 ──
-    if not pending and new_state and any(n in _INTERRUPT_NODES for n in (new_state.next or ())):
-        state_vals = new_state.values or {}
-        next_nodes = set(new_state.next or ())
-
-        if "clarification_confirm" in next_nodes:
-            # 슬롯 수집 완료 후 확인 단계: pending_confirm_msg를 state에서 직접 읽음
-            msg = state_vals.get("pending_confirm_msg") or "진행할까요?"
-            pending = [type("_IV", (), {"value": {"type": "clarification", "message": msg}})()]
-        else:
-            # clarification_slot interrupt: missing_slots 기반 슬롯 질문
-            from app.graph.nodes.clarification import _SLOT_QUESTIONS
-            task_args = state_vals.get("task_args") or {}
-            missing_slots: list = task_args.get("missing_slots") or []
-            if missing_slots:
-                slot = missing_slots[0]
-                msg = _SLOT_QUESTIONS.get(slot, f"'{slot}' 정보를 알려주세요.")
-            else:
-                msg = state_vals.get("input_data") or ""
-            pending = [type("_IV", (), {"value": {"type": "clarification", "message": msg}})()]
-
-    if pending:
-        iv = pending[0]
-        interrupt_data = iv.value if hasattr(iv, "value") else iv
-        if not isinstance(interrupt_data, dict):
-            interrupt_data = {}
-        interrupt_type_val = interrupt_data.get("type", "")
-        return JSONResponse({
-            "type":           "interrupt",
-            "interrupt_type": interrupt_type_val,
-            "message":        interrupt_data.get("message", ""),
-            "hint":           interrupt_data.get("hint", ""),
-            "current_task":   interrupt_type_val,
-            "sources":        [],
-        })
-
-    # ── 라우팅 로그 저장 ──────────────────────────────────────
+    # ── 라우팅 로그 저장 (v2 의 routing_decision 사용) ────────
     save_routing_log(
         user_id=str(user.get("user_id") or user.get("email")),
         input_text=user_input,
-        final_task=(result.get("task_type") or "unknown"),
-        routing_debug=(result.get("task_args") or {}).get("routing_debug", {}),
+        final_task=(result.get("routing_decision") or "unknown"),
+        routing_debug={"decision_path": result.get("decision_path", [])},
     )
 
     # ── 응답 포맷팅 ───────────────────────────────────────────
-    task_type = (result.get("task_type") or "").strip()
+    routing_decision = (result.get("routing_decision") or "").strip()
+    security_blocked = result.get("security_blocked", False)
 
-    # 인젝션 거부 응답: rejection_node가 messages에 추가하지 않으므로 여기서 직접 반환.
-    # 이로써 인젝션 텍스트가 thread history에 누적되어 슬라이딩 윈도우 검사에서
-    # false positive를 유발하는 것을 방지한다.
-    if task_type == "injection":
+    # 보안 차단 응답
+    if security_blocked or routing_decision == "rejected":
         return {
             "type":    "chat",
-            "answer":  "해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
+            "answer":  result.get("answer") or "해당 질문은 사내 AI 어시스턴트의 지원 범위에 포함되지 않아 답변을 제공하지 않습니다. 사내 업무 관련 질문을 입력해 주세요.",
             "sources": [],
         }
 
-    # 기본 chat 응답
-    raw_answer = result.get("messages", [])[-1].content if result.get("messages") else ""
-
-    if isinstance(raw_answer, list) and len(raw_answer) > 0:
-        final_text = raw_answer[0].get("text", "응답을 처리할 수 없습니다.")
-    else:
-        final_text = str(raw_answer)
+    # v2 의 answer 필드 직접 사용 (generator/qa_lookup_node 가 채움)
+    final_text = result.get("answer") or ""
+    if not final_text:
+        # fallback — messages 의 마지막 AIMessage
+        msgs = result.get("messages") or []
+        if msgs:
+            raw_answer = msgs[-1].content
+            if isinstance(raw_answer, list) and len(raw_answer) > 0:
+                final_text = raw_answer[0].get("text", "")
+            else:
+                final_text = str(raw_answer)
 
     _, final_text = validate_output(final_text)
 
@@ -438,10 +300,19 @@ async def chat_endpoint(request: Request):
         return {int(x) for x in re.findall(r"\[(\d{1,3})\]", text or "")}
 
     cited_ids = _extract_cited_ids(final_text)
-    all_sources = result.get("citations_used") or result.get("citations") or []
+    # v2 의 citations 필드 (Citation Pydantic objects)
+    raw_citations = result.get("citations") or []
+    citations_dicts = []
+    for c in raw_citations:
+        if hasattr(c, "model_dump"):
+            citations_dicts.append(c.model_dump())
+        elif hasattr(c, "dict"):
+            citations_dicts.append(c.dict())
+        elif isinstance(c, dict):
+            citations_dicts.append(c)
     filtered_sources = [
-        s for s in all_sources
-        if isinstance(s, dict) and isinstance(s.get("id"), int) and s.get("id") in cited_ids
+        s for s in citations_dicts
+        if isinstance(s.get("id"), int) and s.get("id") in cited_ids
     ]
 
     return {
@@ -486,7 +357,7 @@ def _get_chat_thread_config(user: dict) -> dict:
 def _extract_file_to_text(content: bytes, filename: str) -> tuple[str, dict]:
     import tempfile
     from pathlib import Path
-    from app.graph.nodes.file_extractor import extract_text_from_file
+    from app.graph.nodes.file_extractor import extract_text_from_file  # v1 file extractor 재사용 (포맷 추출 로직만 의존)
 
     suffix = os.path.splitext(filename)[1].lower()
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
