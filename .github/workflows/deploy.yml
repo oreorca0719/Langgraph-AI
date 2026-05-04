@@ -1,4 +1,4 @@
-name: Deploy to AWS App Runner
+name: Deploy to AWS ECS Fargate
 
 on:
   push:
@@ -8,6 +8,13 @@ on:
 concurrency:
   group: deploy-main
   cancel-in-progress: true
+
+env:
+  AWS_REGION: ap-northeast-1
+  ECR_REPOSITORY: langgraph-rag
+  ECS_CLUSTER: langgraph-rag-cluster
+  ECS_SERVICE: langgraph-rag-service
+  TASK_DEFINITION_FAMILY: langgraph-rag
 
 jobs:
   deploy:
@@ -22,43 +29,57 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Build, tag, and push image to ECR
+        id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
-      - name: Wait for App Runner to be RUNNING
+      - name: Render new ECS task definition
+        id: render-task-def
         run: |
-          echo "App Runner 서비스 상태 대기 중..."
-          for i in $(seq 1 20); do
-            STATUS=$(aws apprunner describe-service \
-              --service-arn ${{ secrets.APP_RUNNER_SERVICE_ARN }} \
-              --query "Service.Status" --output text)
-            echo "현재 상태: $STATUS"
-            if [ "$STATUS" = "RUNNING" ]; then
-              echo "RUNNING 상태 확인. 배포 진행."
-              break
-            fi
-            if [ $i -eq 20 ]; then
-              echo "대기 시간 초과 (10분). 배포를 중단합니다."
-              exit 1
-            fi
-            sleep 30
-          done
+          # 현재 등록된 task definition 의 최신 revision 을 받아 image 만 교체
+          aws ecs describe-task-definition \
+            --task-definition $TASK_DEFINITION_FAMILY \
+            --query 'taskDefinition' \
+            > task-def.json
 
-      - name: Deploy to App Runner
+          # image, registers 만 갱신 (containerDefinitions[0].image)
+          jq --arg IMG "${{ steps.build-image.outputs.image }}" '
+            .containerDefinitions[0].image = $IMG
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .compatibilities, .registeredAt, .registeredBy)
+          ' task-def.json > new-task-def.json
+
+          NEW_TD=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+          echo "task_def_arn=$NEW_TD" >> $GITHUB_OUTPUT
+
+      - name: Update ECS service to new task definition
         run: |
-          aws apprunner start-deployment \
-            --service-arn ${{ secrets.APP_RUNNER_SERVICE_ARN }}
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $ECS_SERVICE \
+            --task-definition ${{ steps.render-task-def.outputs.task_def_arn }} \
+            --force-new-deployment
+
+      - name: Wait for service to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster $ECS_CLUSTER \
+            --services $ECS_SERVICE
+          echo "Deployment complete."

@@ -4,21 +4,28 @@ FROM python:3.11-slim
 # 2. 작업 디렉토리 생성
 WORKDIR /app
 
-# 3. 필수 패키지 설치 및 환경 설정
-# 도커 내에서 파이썬 출력을 실시간으로 확인하기 위해 설정
+# 3. 환경 설정
 ENV PYTHONUNBUFFERED=1
 
-# 4. 의존성 파일 복사 및 설치
+# 4. OS-level 의존성 (sentence-transformers/torch 빌드 의존)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# 5. Python 의존성 설치
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. 프로젝트 전체 파일 복사 (중요!)
-# 현재 디렉토리의 모든 파일과 폴더(app, static, templates, main.py 등)를 복사합니다.
+# 6. Cross-encoder reranker 모델 사전 다운로드 (이미지에 포함 → 컨테이너 시작 시 빠른 cold start)
+#    ~2.3GB. CPU-only 추론이므로 GPU 의존성 없음.
+RUN python -c "from sentence_transformers import CrossEncoder; \
+    CrossEncoder('BAAI/bge-reranker-v2-m3', max_length=512)"
+
+# 7. 프로젝트 코드 복사
 COPY . .
 
-# 6. 포트 노출
+# 8. 포트 노출
 EXPOSE 8080
 
-# 7. 실행 명령 (배포용 설정)
-# --reload는 제외하고, worker 수를 조절하여 안정성을 높입니다.
+# 9. 실행 명령
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]

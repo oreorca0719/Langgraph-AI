@@ -1,0 +1,86 @@
+{
+  "family": "langgraph-rag",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::333347414948:role/langgraph-rag-task-execution",
+  "taskRoleArn": "arn:aws:iam::333347414948:role/langgraph-rag-task",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "volumes": [
+    {
+      "name": "chroma",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-0bf7a2c72bed868d9",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "fsap-0877e174e63b9e599",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "app",
+      "image": "333347414948.dkr.ecr.ap-northeast-1.amazonaws.com/langgraph-rag:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "chroma",
+          "containerPath": "/mnt/chroma",
+          "readOnly": false
+        }
+      ],
+      "environment": [
+        {"name": "AWS_REGION", "value": "ap-northeast-1"},
+        {"name": "AUTO_INGEST", "value": "1"},
+        {"name": "S3_KNOWLEDGE_BUCKET", "value": "langgraph-rag-knowledge-prod-333347414948"},
+        {"name": "S3_KNOWLEDGE_PREFIX", "value": "knowledge_data/"},
+        {"name": "KNOWLEDGE_DIR", "value": "/app/knowledge_data"},
+        {"name": "CHROMA_DB_PATH", "value": "/mnt/chroma"},
+        {"name": "CHROMA_COLLECTION", "value": "my_knowledge"},
+        {"name": "LLM_MODEL", "value": "gemini-3-flash-preview"},
+        {"name": "LLM_TEMPERATURE", "value": "0"},
+        {"name": "LLM_MAX_OUTPUT_TOKENS", "value": "4096"},
+        {"name": "RETRIEVAL_TOP_K", "value": "5"},
+        {"name": "INGEST_CHUNK_MAX_CHARS", "value": "1200"},
+        {"name": "INGEST_CHUNK_OVERLAP", "value": "200"},
+        {"name": "RERANK_MODEL", "value": "BAAI/bge-reranker-v2-m3"},
+        {"name": "RERANK_RELEVANT_THRESHOLD", "value": "0.5"},
+        {"name": "RERANK_PARTIAL_THRESHOLD", "value": "0.3"},
+        {"name": "RERANK_MAX_LENGTH", "value": "512"},
+        {"name": "CREATE_USERS_TABLE", "value": "0"},
+        {"name": "CREATE_INTENT_SAMPLES_TABLE", "value": "0"},
+        {"name": "CREATE_ROUTING_LOG_TABLE", "value": "0"}
+      ],
+      "secrets": [
+        {
+          "name": "GEMINI_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-northeast-1:333347414948:secret:langgraph-rag/gemini-api-key-cQVXge"
+        },
+        {
+          "name": "GOOGLE_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:ap-northeast-1:333347414948:secret:langgraph-rag/gemini-api-key-cQVXge"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/langgraph-rag",
+          "awslogs-region": "ap-northeast-1",
+          "awslogs-stream-prefix": "app"
+        }
+      }
+    }
+  ]
+}
