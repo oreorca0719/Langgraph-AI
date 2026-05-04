@@ -71,6 +71,10 @@
         {
           "name": "GOOGLE_API_KEY",
           "valueFrom": "arn:aws:secretsmanager:ap-northeast-1:333347414948:secret:langgraph-rag/gemini-api-key-cQVXge"
+        },
+        {
+          "name": "SESSION_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:ap-northeast-1:333347414948:secret:langgraph-rag/session-secret-TNeGqd"
         }
       ],
       "logConfiguration": {
