@@ -257,49 +257,46 @@ def auto_ingest_if_enabled() -> None:
             except Exception:
                 pass
 
-        # 텍스트 추출 (PDF는 페이지 단위, 나머지는 전체 텍스트)
+        # ─── Phase G: 형식 인지 청킹 파이프라인 ───
+        # 1. format 분류 → 2. extractor → 3. adaptive chunking → 4. metadata 부착 (코드 + LLM)
         try:
-            if p.suffix.lower() == ".pdf":
-                pages = _extract_pdf_pages(p)
-                chunks: List[str] = []
-                page_numbers: List[int] = []
-                for page_num, page_text in pages:
-                    for chunk in _chunk_text(page_text):
-                        chunks.append(chunk)
-                        page_numbers.append(page_num)
-            else:
-                raw_text = _extract_text(p)
-                chunks = _chunk_text(raw_text) if raw_text else []
-                page_numbers = [0] * len(chunks)
+            from app.knowledge.chunking.pipeline import run_chunking_only
+            from app.knowledge.chunking.tagger import tag_chunks
+
+            doc_id = rel.replace(".pptx", "").replace(".pdf", "").replace(".docx", "").replace(".txt", "").replace(".xlsx", "").replace(".md", "")
+
+            fmt, units = run_chunking_only(p)
+            if not units:
+                print(f"[INGEST] 추출 결과 없음 {rel}")
+                continue
+
+            # metadata 부착 (LLM doc_topic + chunk_question_types 포함)
+            chunk_objs = tag_chunks(
+                units,
+                doc_id=doc_id,
+                doc_format=fmt,
+                enable_llm_doc_topic=True,
+                enable_llm_chunk_qtype=True,
+            )
+            if not chunk_objs:
+                print(f"[INGEST] 태깅 결과 없음 {rel}")
+                continue
+
+            chunk_ids = [c.chunk_id for c in chunk_objs]
+            chunks_text = [c.text for c in chunk_objs]
+            metadatas = [c.metadata for c in chunk_objs]
         except Exception as e:
-            print(f"[INGEST] 추출 실패 {rel}: {e}")
+            print(f"[INGEST] 청킹 파이프라인 실패 {rel}: {type(e).__name__}: {e}")
             continue
-
-        if not chunks:
-            continue
-
-        chunk_ids = [f"file::{rel}::chunk_{i}" for i in range(len(chunks))]
-        metadatas = [
-            {
-                "source": "file",
-                "path": str(p),
-                "title": p.name,
-                "display_source": rel,
-                "chunk_index": i,
-                "total_chunks": len(chunks),
-                **({"page_number": page_numbers[i]} if page_numbers[i] else {}),
-            }
-            for i in range(len(chunks))
-        ]
 
         try:
-            vectorstore.add_texts(texts=chunks, metadatas=metadatas, ids=chunk_ids)
+            vectorstore.add_texts(texts=chunks_text, metadatas=metadatas, ids=chunk_ids)
             state[rel] = {"hash": current_hash, "chunk_ids": chunk_ids}
             if old_ids:
-                print(f"[INGEST] 갱신: {rel} → {len(chunks)}개 청크")
+                print(f"[INGEST] 갱신: {rel} → {len(chunk_objs)}개 청크 (fmt={fmt})")
                 updated += 1
             else:
-                print(f"[INGEST] 신규: {rel} → {len(chunks)}개 청크")
+                print(f"[INGEST] 신규: {rel} → {len(chunk_objs)}개 청크 (fmt={fmt})")
                 added += 1
         except Exception as e:
             print(f"[INGEST] Chroma 적재 실패 {rel}: {e}")
