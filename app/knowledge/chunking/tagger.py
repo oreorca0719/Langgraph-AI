@@ -102,6 +102,10 @@ def tag_chunks(
         chunk_id = f"file::{doc_id}::page_{u.unit_index}"
         if u.is_table:
             chunk_id = f"file::{doc_id}::page_{u.parent_page_index or u.unit_index}::table_{u.table_index}"
+        elif u.raw_metadata.get("split_part"):
+            # 큰 unit 분할된 경우 part로 disambiguate
+            sp = str(u.raw_metadata["split_part"]).replace("/", "of")
+            chunk_id = f"file::{doc_id}::page_{u.unit_index}::part_{sp}"
 
         metadata = {
             # 위치/구조 (코드)
