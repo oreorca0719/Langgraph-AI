@@ -158,20 +158,130 @@ class ChromaHybridRetriever:
 
     def _to_document(self, lc: LCDocument, score: float) -> Document:
         md = dict(lc.metadata or {})
+        page_unit_index = md.get("page_unit_index")
+        page_unit_title = md.get("page_unit_title", "")
+        location = ""
+        if page_unit_index is not None:
+            location = f"{md.get('page_unit_type', 'page').title()} {page_unit_index}"
+            if page_unit_title:
+                location += f" — {page_unit_title}"
+        elif md.get("page_number"):
+            location = f"Page {md['page_number']}"
+        else:
+            location = f"Chunk {md.get('chunk_index', 0)}"
+
         return Document(
             content=lc.page_content or "",
-            source=md.get("display_source") or md.get("path") or md.get("title") or "",
-            score=max(0.0, min(1.0, score)),  # clamp 0~1
+            source=md.get("doc_id") or md.get("display_source") or md.get("title") or "",
+            score=max(0.0, min(1.0, score)),
             metadata={
                 "title": md.get("title", ""),
-                "doc_id": md.get("display_source", md.get("title", "")),
-                "location": (
-                    f"Page {md['page_number']}" if md.get("page_number")
-                    else f"Chunk {md.get('chunk_index', 0)}"
-                ),
-                "chunk_index": md.get("chunk_index", 0),
-                "total_chunks": md.get("total_chunks", 0),
-                **{k: v for k, v in md.items()
-                   if k not in {"title", "display_source", "page_number", "chunk_index", "total_chunks", "path"}},
+                "doc_id": md.get("doc_id") or md.get("display_source", md.get("title", "")),
+                "doc_format": md.get("doc_format", ""),
+                "doc_topic": md.get("doc_topic", "general"),
+                "page_unit_index": page_unit_index,
+                "page_unit_type": md.get("page_unit_type", ""),
+                "page_unit_title": page_unit_title,
+                "section_path": md.get("section_path", ""),
+                "is_table": md.get("is_table", False),
+                "table_index": md.get("table_index"),
+                "parent_page_index": md.get("parent_page_index"),
+                "entities": md.get("entities", ""),
+                "chunk_question_types": md.get("chunk_question_types", ""),
+                "location": location,
             },
         )
+
+    # ────────────────────────────────────────────────────────
+    # Phase G: Page-level co-retrieval
+    # ────────────────────────────────────────────────────────
+
+    def expand_with_same_page(self, retrieved: list[Document]) -> list[Document]:
+        """Retrieve된 chunks의 (doc_id, page_unit_index)와 같은 모든 chunks를 추가 fetch.
+
+        예: chunk_19a (본문)이 retrieve되면 → chunk_19b (표)도 함께.
+        같은 페이지의 본문·표를 함께 보면 retrieval 정밀도 + 답변 컨텍스트 풍부.
+        """
+        if not retrieved:
+            return retrieved
+
+        # 이미 가진 chunks의 (doc_id, page) 키 집합
+        page_keys: set[tuple[str, int]] = set()
+        existing_contents = {d.content for d in retrieved}
+        for d in retrieved:
+            doc_id = d.metadata.get("doc_id")
+            page = d.metadata.get("page_unit_index")
+            parent = d.metadata.get("parent_page_index")
+            if doc_id and page is not None:
+                page_keys.add((doc_id, page))
+            # 표면 본문 페이지도 함께 fetch
+            if doc_id and parent is not None:
+                page_keys.add((doc_id, parent))
+
+        if not page_keys:
+            return retrieved
+
+        # ChromaDB에서 같은 page_keys의 모든 chunks fetch
+        expanded = list(retrieved)
+        try:
+            collection = self._get_chroma()._collection
+            # ChromaDB get은 단일 where만 — page_keys별로 반복
+            for doc_id, page in page_keys:
+                # 1) page_unit_index가 page인 chunks
+                res = collection.get(
+                    where={"$and": [{"doc_id": doc_id}, {"page_unit_index": page}]},
+                    include=["documents", "metadatas"],
+                )
+                # 2) parent_page_index가 page인 chunks (같은 페이지의 표)
+                res2 = collection.get(
+                    where={"$and": [{"doc_id": doc_id}, {"parent_page_index": page}]},
+                    include=["documents", "metadatas"],
+                )
+                for r in (res, res2):
+                    docs_t = r.get("documents") or []
+                    metas = r.get("metadatas") or []
+                    for txt, meta in zip(docs_t, metas):
+                        if txt and txt not in existing_contents:
+                            existing_contents.add(txt)
+                            expanded.append(self._to_document(
+                                LCDocument(page_content=txt, metadata=meta or {}),
+                                score=0.5,  # co-retrieval은 중간 score 부여
+                            ))
+        except Exception as e:
+            print(f"[CO_RETRIEVAL] failed (non-fatal): {e}")
+
+        return expanded
+
+    # ────────────────────────────────────────────────────────
+    # Phase G: doc_topic / qtype boost
+    # ────────────────────────────────────────────────────────
+
+    def boost_by_query_context(
+        self,
+        docs: list[Document],
+        query_doc_topic: str | None = None,
+        query_qtype: str | None = None,
+    ) -> list[Document]:
+        """query의 doc_topic / question_type과 일치하는 chunks score boost."""
+        if not docs:
+            return docs
+        boosted: list[Document] = []
+        for d in docs:
+            score = d.score
+            # doc_topic 일치 boost
+            if query_doc_topic and d.metadata.get("doc_topic") == query_doc_topic:
+                score = min(1.0, score + 0.15)
+            # qtype 일치 boost
+            if query_qtype:
+                chunk_qtypes = (d.metadata.get("chunk_question_types") or "").split(",")
+                if query_qtype in chunk_qtypes:
+                    score = min(1.0, score + 0.10)
+            boosted.append(Document(
+                content=d.content,
+                source=d.source,
+                score=score,
+                metadata=d.metadata,
+            ))
+        # score 내림차순 재정렬
+        boosted.sort(key=lambda x: x.score, reverse=True)
+        return boosted

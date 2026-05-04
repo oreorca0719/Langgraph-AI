@@ -112,11 +112,17 @@ def query_planner_node(state: GraphState) -> dict:
 # ────────────────────────────────────────────────────────────
 
 def retrieve_node(state: GraphState) -> dict:
-    """Retriever Protocol 통해 검색. 단일 또는 multi-query."""
+    """Retriever Protocol 통해 검색. 단일 또는 multi-query.
+
+    Phase G 추가:
+      1. 기본 hybrid 검색 후
+      2. expand_with_same_page: 같은 page_unit의 다른 chunks 함께 fetch
+      3. boost_by_query_context: query qtype 일치 chunks score boost
+         (doc_topic boost는 router가 query_doc_topic 분류 시 활성화)
+    """
     queries = state.sub_questions or [state.input_data]
     queries = [q for q in queries if q]
 
-    # 현재는 chroma_hybrid 단일 retriever 사용
     retriever = _get_registry().get("chroma_hybrid")
 
     pool: dict[str, Document] = {}
@@ -125,7 +131,6 @@ def retrieve_node(state: GraphState) -> dict:
             for d in retriever.retrieve(q, top_k=5):
                 key = d.content
                 if key in pool:
-                    # 동일 chunk가 여러 query에서 나오면 score 누적 (max + 0.1 boost)
                     pool[key] = Document(
                         content=d.content,
                         source=d.source,
@@ -139,9 +144,29 @@ def retrieve_node(state: GraphState) -> dict:
 
     docs = sorted(pool.values(), key=lambda d: d.score, reverse=True)[:5]
 
+    # Phase G: 같은 page의 다른 chunks 함께 fetch (표·본문 함께 보기)
+    if hasattr(retriever, "expand_with_same_page"):
+        try:
+            docs = retriever.expand_with_same_page(docs)
+        except Exception as e:
+            print(f"[RETRIEVE] co-retrieval failed (non-fatal): {e}")
+
+    # Phase G: qtype boost (router question_type 활용)
+    if hasattr(retriever, "boost_by_query_context"):
+        try:
+            docs = retriever.boost_by_query_context(
+                docs,
+                query_qtype=state.question_type,
+            )
+        except Exception as e:
+            print(f"[RETRIEVE] boost failed (non-fatal): {e}")
+
+    # 최종 top 7 (co-retrieval로 늘었으니 약간 더)
+    docs = docs[:7]
+
     return {
         "retrieved_docs": docs,
-        "decision_path": [f"retrieve:{len(queries)}q→{len(docs)}docs"],
+        "decision_path": [f"retrieve:{len(queries)}q→{len(docs)}docs(co+boost)"],
     }
 
 
