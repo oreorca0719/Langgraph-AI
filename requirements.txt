@@ -21,3 +21,6 @@ itsdangerous
 langgraph-checkpoint
 slowapi
 rank-bm25
+
+# Cross-encoder reranker (grader 대체)
+sentence-transformers
