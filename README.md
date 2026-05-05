@@ -1,6 +1,6 @@
 # Langgraph-AI
 
-사내 업무 보조 AI 어시스턴트 — LangGraph + RAG 기반 FastAPI 백엔드
+사내 업무 보조 AI 어시스턴트 — LangGraph + Agentic RAG 기반 FastAPI 백엔드
 
 **개발자: 김범준**
 
@@ -36,150 +36,159 @@
 ## 개요
 
 사내 임직원을 위한 AI 어시스턴트 웹 애플리케이션입니다.
-사용자 질문 의도를 다단계 라우터(Semantic + LLM)로 분류하여, **사내 문서 검색 (Agentic RAG) · 심화 검색 · 파일 분석** 3가지 기능을 단일 채팅 인터페이스에서 제공합니다.
+사용자 질문 의도를 LLM 기반 라우터로 분류하여, **사내 문서 검색 (Agentic RAG) · 파일 분석 · 기능 안내** 3가지 기능을 단일 채팅 인터페이스에서 제공합니다.
 
-**현재 운영**: v2 그래프 (`app/graph_v2`) — Self-RAG 패턴(grader → reflection → replan loop) 기반 자가검증 RAG.
-**라이브러리**: LangGraph의 순환·conditional edge·DynamoDB 체크포인터 영속화 활용.
+**현재 운영**: v2 그래프 (`app/graph_v2/`) — Self-RAG 패턴(grader → reflection → replan loop) 기반 자가검증 RAG.
+**라이브러리**: LangGraph 0.2+ (`StateGraph`, conditional edges, subgraph composition, DynamoDB checkpointer).
 
-> **v1 그래프 (`app/graph`)**: 13-노드 플랫 구조, clarification interrupt 기반. 현재 평가용으로만 유지. 운영은 v2.
+> **v1 그래프 (`app/graph/`)**: 13-노드 플랫 구조, clarification interrupt 기반. 평가/회귀용으로만 유지. **운영은 v2 사용**.
 
 ---
 
 ## 주요 기능
 
 | 기능 | 설명 |
-|------|------|
-| **사내 문서 검색 (RAG)** | 시맨틱 + BM25 하이브리드 검색(RRF 병합)으로 사내 지식 베이스 검색 · 출처 페이지 번호 표시 · 검색 결과 없을 시 쿼리 재작성 후 재검색(최대 2회) |
-| **심화 검색** | "좀 더 자세히" 등 후속 심화 질의 감지 시 직전 Q&A 컨텍스트로 쿼리 재구성 + 참조 문서 범위 내 확장 검색 |
-| **파일 분석** | PDF·DOCX·XLSX·PPTX·TXT·MD 첨부파일 텍스트 추출 및 요약 / Q&A |
-| **AI 기능 안내** | 인사·자기소개·기능 문의에 대해 위 3가지 기능을 안내 (범위 외 기능 차단) |
-| **다단계 라우터** | 시맨틱 임베딩 매칭 + LLM Fallback · 슬롯 기반 clarification · 무한 루프 방지 (count≥2) |
-| **slot 기반 clarification** | `file_context` 누락 시 interrupt() 기반 사용자 질문 후 재라우팅 |
-| **대화 컨텍스트 영속화** | DynamoDB 체크포인터로 배포 후에도 대화 히스토리 유지 |
-| **프롬프트 인젝션 방어** | 4계층 오케스트레이션 방어 시스템 (Fine-tuning 없이 코드 레벨 구현) |
+|---|---|
+| **사내 문서 검색 (Agentic RAG)** | Hybrid retrieval (Chroma + BM25 + 한국어 형태소 분석) → cross-encoder reranker (`bge-reranker-v2-m3`) → grader threshold filtering → generator → reflection self-check → replan loop |
+| **Q&A Cache** | 평가셋 라벨 기반 별도 ChromaDB collection — 자주 묻는 질문의 즉시 응답으로 LLM 호출·레이턴시 절감 |
+| **파일 분석 (file_chat)** | PDF·DOCX·XLSX·PPTX·TXT 첨부파일 텍스트 추출 후 system prompt에 직접 주입하여 Q&A |
+| **기능 안내 (ai_guide)** | 인사·메타 질의에 대한 짧은 안내 |
+| **Question type 분류** | exact_phrase / numerical / list_n / fill_blank / reasoning / comparison — 각 type별 generator prompt 분기 |
+| **Multi-hop retrieval** | 복합 질문을 sub-questions로 분해해 multi-query 검색 후 종합 |
+| **Self-correction loop** | grader fail → query rewrite (최대 3회) / reflection fail → replan reset → router 회귀 (최대 1회) |
+| **프롬프트 인젝션 방어** | 그래프 진입점 (`security_gate`)에서 임베딩 유사도 + 슬라이딩 윈도우 기반 차단 |
 
 ---
 
 ## 기술 스택
 
-- **Backend**: FastAPI, Python 3.11
-- **AI Orchestration**: LangGraph (`StateGraph`, `interrupt`, `Command`, `DynamoDBCheckpointer`)
+- **Backend**: FastAPI · Python 3.11
+- **AI Orchestration**: LangGraph 0.2+ (`StateGraph`, subgraph composition, `DynamoDBCheckpointer`)
 - **LLM**: Google Gemini (`gemini-3-flash-preview`)
 - **Embedding**: Google `gemini-embedding-001`
-- **Vector DB**: Chroma (로컬 영속 스토리지) + BM25 (rank-bm25, 인메모리 싱글톤)
-- **Document Store**: Amazon DynamoDB (ap-northeast-1)
+- **Vector DB**: Chroma (EFS 영속 / 로컬) + BM25 (`rank-bm25`, 인메모리 싱글톤)
+- **한국어 토큰화**: `kiwipiepy` (BM25 morphological analyzer, POS 필터링)
+- **Reranker**: `BAAI/bge-reranker-v2-m3` (cross-encoder, sentence-transformers)
+- **Document Store**: Amazon DynamoDB (사용자·체크포인터)
 - **Auth**: 세션 쿠키 + CSRF 토큰
-- **Infrastructure**: AWS App Runner + Amazon ECR
+- **Infrastructure**: **AWS ECS Fargate** + Amazon ECR + EFS (Chroma 영속) + ALB
 - **File Storage**: Amazon S3 (사내 문서 원본)
+- **Secrets**: AWS Secrets Manager (Gemini API key, session secret)
 
 ---
 
-## 그래프 구조 (플랫, 13 노드)
+## 그래프 구조 (v2)
+
+### Main graph
 
 ```
-사용자 요청
-    │
-    ▼
-[input_guard] — 임베딩 유사도 injection 감지
-    ├─[injection]→ rejection → END
-    └─[pass]→ task_router — 다단계 라우팅
-                  │
-                  ├─ knowledge_search → search → quality_check
-                  │                               ├─[ok]→ answer → END
-                  │                               └─[no docs]→ rewrite → search  ← 순환 (최대 2회)
-                  │
-                  ├─ detail_search → answer → END  ← 심화 질의 전용
-                  │
-                  ├─ ai_guide → END
-                  │
-                  ├─ file_chat → END
-                  │
-                  ├─ rejection → END
-                  │
-                  └─ clarification ──interrupt──→ 사용자 슬롯 질문
-                         ├─[knowledge_search]→ search    ← 루프 방어 fallback
-                         ├─[clarification_confirm]→ interrupt → task_router  ← 진행 확인
-                         └─[task_router]→ task_router  ← 슬롯 채워진 채로 재라우팅
-
-대화 상태 (히스토리 · 첨부파일 컨텍스트)
-    └── DynamoDBCheckpointer → langgraph_checkpoints 테이블 (TTL 7일)
+START
+  │
+  ▼
+[security_gate] — 임베딩 유사도 + 슬라이딩 윈도우 injection 감지
+  ├─(blocked)→ [rejected] → END
+  └─(pass)
+  │
+  ▼
+[router] — LLM 기반 분류 (routing_decision + question_type + sub_questions)
+  ├─ no_retrieval     → [no_retrieval_answer] → END    (인사·메타 질의)
+  ├─ ai_guide         → [ai_guide]            → END    (기능 안내)
+  ├─ file_chat        → [file_chat]           → END    (첨부 파일 Q&A)
+  ├─ rejected         → [rejected]            → END    (범위 외)
+  └─ single/multi_hop_retrieval
+      │
+      ▼
+  [qa_lookup] — Q&A cache 조회 (평가셋 라벨 기반)
+      ├─(hit)→ END (즉시 응답)
+      └─(miss)
+      │
+      ▼
+  [retrieve_subgraph] — hybrid + grade + rewrite loop
+      │
+      ▼
+  [generate_subgraph] — generator + reflection
+      │
+      ▼
+  verification.passed?
+      ├─(pass)→ END
+      └─(fail + replan_iterations < 1)
+            │
+            ▼
+        [replan_reset] — retrieved_docs/answer/verification 초기화, replan_iterations++
+            │
+            └─→ [router] (재계획)
 ```
 
----
-
-## interrupt 동작 방식 (slot 기반 clarification)
-
-`file_chat` 라우팅 시 첨부 파일(`file_context`)이 없으면 그래프가 일시정지되고 사용자 응답을 대기합니다.
+### Retrieve subgraph
 
 ```
-사용자: "이 파일 분석해줘" (파일 첨부 없음)
-  → task_router는 file_chat으로 분류했으나 file_context 슬롯 누락
-  → clarification_slot interrupt → "첨부 파일이 필요합니다. 먼저 파일을 업로드해 주세요." 반환
-
-사용자: 파일 업로드
-  → /upload 엔드포인트 → state.file_context 채워짐
-  → 다음 채팅 입력 시 task_router가 file_chat으로 정상 라우팅
+[retrieve] (Chroma + BM25 hybrid via RRF)
+  → [grader] — cross-encoder reranker score → relevant / partial / irrelevant 분류
+       ├─(kept >= 1)→ exit
+       └─(kept = 0 && retrieval_iterations < 3)
+              ├─→ [rewrite] — LLM query rewrite with negative feedback
+              │      └─→ [retrieve] (loop)
+              └─(kept = 0 && retrieval_iterations >= 3)→ exit (no_docs)
 ```
 
-**`/chat` API 처리 흐름**
+### Generate subgraph
 
-1. `get_state()`로 활성 interrupt 여부 확인
-2. interrupt 활성 → `Command(resume=user_input)` 으로 그래프 재개
-3. interrupt 없음 → `input_guard`부터 신규 실행
-4. `invoke()` 반환 후 `get_state()` 재확인 — 새 interrupt 발생 시 메시지 포함 응답 반환
-5. 완료 시 `task_type` 기반 응답 포맷 반환
-
-**interrupt 응답 구조**
-
-```json
-{
-  "type": "interrupt",
-  "interrupt_type": "clarification",
-  "current_task": "clarification",
-  "message": "분석할 파일 경로 또는 파일명을 알려주세요.",
-  "hint": "",
-  "sources": []
-}
+```
+[generator] — question_type별 prompt 분기 + 4단계 자기검증 + URL 디코딩
+  → [reflection] — regex fact check + LLM CoT judge (groundedness/relevance/hallucination)
+       └─→ exit
 ```
 
 ---
 
-## 라우팅 의도 카테고리
+## Routing decision (router 출력)
 
-| 카테고리 | 처리 방식 |
+| decision | 처리 |
 |---|---|
-| `knowledge_search` | 시맨틱+BM25 하이브리드 검색(RRF) → 결과 없을 시 쿼리 재작성 후 재검색(최대 2회) → LLM 답변 |
-| `detail_search` | 직전 Q&A 기반 쿼리 재구성 + 참조 문서 필터 확장 검색 → LLM 답변 |
-| `ai_guide` | 기능 안내 전용 LLM (도구 없음) |
-| `file_chat` | 첨부 파일 기반 Q&A (시스템 프롬프트에 파일 내용 직접 주입) |
-| `unknown` | fallback: ai_guide (짧은 질문/안내 요청) 또는 knowledge_search (일반 질문) |
-| `clarification` | 슬롯 감지 (file_context) · clarification_count≥2 → knowledge_search 강제 fallback |
-| `injection` | input_guard / task_router에서 차단 → rejection |
+| `single_retrieval` | 단일 질문 검색 (가장 흔함) |
+| `multi_hop_retrieval` | 복합 질문 → sub_questions 분해 후 multi-query 검색 |
+| `no_retrieval` | 인사·메타 질의 → 짧은 LLM 응답 |
+| `ai_guide` | 기능 안내 |
+| `file_chat` | 첨부 파일 기반 Q&A |
+| `rejected` | 범위 외 차단 |
+
+## Question type (router 출력)
+
+| type | 응답 형식 | 예시 |
+|---|---|---|
+| `exact_phrase` | 검색 결과 verbatim 한 줄 | "대한민국 최초 금융 IT 매칭 플랫폼 [1]" |
+| `numerical` | 수치·시간만 | "12:30~14:00 [1]" |
+| `list_n` | 정확히 N개 항목, 부족하면 soft completion 명시 | "• 차별성 [1]\\n• 베네핏 [1]\\n• 행동 유발 [1]" |
+| `fill_blank` | 빈칸 단어/구만 | "이게 되네! [1]" |
+| `reasoning` | 추론적 답 + 근거 인용 | "결론 → 근거 [N]" |
+| `comparison` | 비교 entity별 명시 | "• 일반 매칭: ...\\n• 그레이트프로: ..." |
 
 ---
 
-## 라우팅 시스템
+## GraphState 필드 (v2)
 
-`task_router.py`는 2단계 라우터로 구성됩니다.
+`app/graph_v2/states/state.py` — Pydantic v2 BaseModel + LangGraph reducer.
 
-```
-사용자 요청
-    │
-    ├─ 1. _semantic_route — intent_samples 임베딩 기반 코사인 유사도 분류
-    │      ├─ 신뢰도 임계값(top1 ≥ 0.62, margin ≥ 0.08) 통과 시 결정
-    │      └─ unknown이면 다음 단계
-    │
-    └─ 2. llm_intent_fallback — LLM 직접 분류 (timeout 8초)
-           └─ 결과를 intent_samples에 자동 누적 (학습 효과)
-```
-
-**slot 기반 clarification**
-
-| 누락 슬롯 | 질문 내용 | 발동 조건 |
+| 필드 | 타입 | 설명 |
 |---|---|---|
-| `file_context` | 파일 업로드 요청 | file_chat인데 업로드된 파일이 없을 때 |
-
-루프 방어: `clarification_count ≥ 2` → `knowledge_search` 강제 fallback
+| `input_data` | str | 사용자 입력 (rewrite 시 변경됨) |
+| `original_input` | str | rewrite 시에도 불변 (anchor) |
+| `input_embedding` | List[float] | 한 번 계산 후 재사용 |
+| `trace_id` | str | 요청별 트레이스 ID |
+| `routing_decision` | str | router 출력 (single/multi/no_retrieval/...) |
+| `question_type` | str | router 출력 (exact_phrase/numerical/...) |
+| `sub_questions` | List[str] | multi_hop 분해 결과 (최대 5) |
+| `retrieved_docs` | List[Document] | retriever + grader 통과한 문서 |
+| `citations` | List[Citation] | generator가 부착한 출처 |
+| `answer` | str | generator 출력 |
+| `verification` | VerificationResult | reflection 결과 (groundedness/relevance/hallucination_risk/passed) |
+| `retrieval_iterations` | int | rewrite loop 카운트 (상한 3) |
+| `replan_iterations` | int | replan loop 카운트 (상한 1) |
+| `llm_call_count` | int | LLM 호출 누적 |
+| `decision_path` | List[str] | 노드 진입 trace (Annotated[..., add] 누적) |
+| `messages` | Sequence[BaseMessage] | 대화 히스토리 (add_messages 누적) |
+| `file_context` / `file_context_name` | Optional[str] | file_chat 경로용 |
+| `security_blocked` / `security_reason` | bool / str | security_gate 결과 |
 
 ---
 
@@ -187,107 +196,108 @@
 
 ```
 Langgraph-AI/
-├── main.py                        # FastAPI 앱 엔트리포인트 + LangGraph 플랫 그래프 구성
+├── main.py                            # FastAPI 앱 + v2 그래프 운영 진입점
 ├── requirements.txt
-├── Dockerfile
-├── .dockerignore
-├── .env.example                   # 환경변수 템플릿
-├── policy-dynamo-users.json       # DynamoDB IAM 정책 파일
-├── trust-apprunner-instance.json  # App Runner IAM 신뢰 정책 파일
-├── .github/workflows/deploy.yml   # CI/CD 파이프라인
+├── Dockerfile                         # 멀티스테이지 빌드 + 모델 사전 다운로드 (cross-encoder)
+├── .env.example
+├── .github/workflows/deploy.yml       # CI/CD: ECR 빌드/푸시 + ECS update-service
+├── infrastructure/
+│   └── ecs-task-definition.json       # ECS Fargate task definition (EFS, Secrets, env)
 │
 ├── app/
-│   ├── checkpointer/
-│   │   └── dynamo_checkpointer.py # DynamoDB 기반 LangGraph 체크포인터
+│   ├── graph_v2/                      # ★ 운영 그래프 (v2)
+│   │   ├── builder.py                 # main graph 조립
+│   │   ├── states/state.py            # GraphState (Pydantic + reducer)
+│   │   ├── nodes/
+│   │   │   ├── security.py            # security_gate (injection 차단)
+│   │   │   ├── router.py              # LLM 라우터 (routing_decision + question_type)
+│   │   │   ├── qa_lookup.py           # Q&A cache 조회
+│   │   │   ├── grader.py              # cross-encoder threshold grader
+│   │   │   ├── generator.py           # answer 생성 (question_type별 prompt + URL 디코딩)
+│   │   │   └── reflection.py          # CoT judge (groundedness/relevance/hallucination)
+│   │   ├── subgraphs/
+│   │   │   ├── retrieve.py            # retrieve + grade + rewrite loop
+│   │   │   └── generate.py            # generate + reflect
+│   │   └── retrievers/
+│   │       ├── base.py                # Document type
+│   │       ├── chroma_hybrid.py       # Chroma + BM25 RRF + kiwipiepy 토큰화
+│   │       └── reranker.py            # bge-reranker-v2-m3 wrapper (싱글톤)
 │   │
-│   ├── auth/
-│   │   ├── dynamo.py              # DynamoDB 사용자 CRUD
-│   │   ├── routes.py              # 인증·관리자 API 라우터
-│   │   ├── intent_samples.py      # 시맨틱 라우터 seed 데이터 관리
-│   │   ├── routing_log.py         # 라우팅 이력 기록 / 조회
-│   │   ├── deps.py                # 인증 의존성 (get_current_user)
-│   │   └── security.py            # 세션·CSRF 유틸
+│   ├── graph/                         # v1 (deprecated, 평가용 유지)
+│   │   ├── states/state.py
+│   │   └── nodes/                     # input_guard, task_router, clarification, ...
 │   │
-│   ├── graph/
-│   │   ├── states/state.py        # GraphState 정의
-│   │   └── nodes/
-│   │       ├── input_guard.py     # 그래프 진입점 보안 필터 (injection 차단)
-│   │       ├── task_router.py     # 다단계 라우터 (Semantic + LLM Fallback)
-│   │       ├── clarification.py   # 슬롯 누락 시 interrupt 기반 사용자 질문
-│   │       ├── knowledge_search.py # search / quality_check / rewrite / answer 4노드 (하이브리드 검색)
-│   │       ├── detail_search.py   # 심화 질의 전용 노드 (쿼리 재구성 + 문서 필터 검색)
-│   │       ├── ai_guide.py        # AI 기능 안내 노드
-│   │       ├── file_chat.py       # 첨부 파일 Q&A 노드 (시스템 프롬프트 주입)
-│   │       ├── file_extractor.py  # 파일 텍스트 추출 헬퍼 (XLSX/DOCX/PPTX 마크다운 변환)
-│   │       └── llm_intent_fallback.py  # LLM 기반 의도 분류 fallback
-│   │
+│   ├── auth/                          # 인증·관리자 API
+│   ├── checkpointer/                  # DynamoDB LangGraph checkpointer
+│   ├── core/                          # config, llm factory
 │   ├── knowledge/
-│   │   └── ingest.py              # S3 → Chroma 문서 인제스트 (PDF 페이지 단위 청킹)
-│   │
-│   ├── security/
-│   │   ├── injection_detector.py  # 임베딩 유사도 + 슬라이딩 윈도우 injection 탐지
-│   │   ├── content_sanitizer.py   # RAG 문서 · 파일 내용 sanitize
-│   │   └── output_validator.py    # 응답 민감 정보 출력 검증
-│   │
-│   └── core/
-│       ├── config.py              # 환경변수 중앙 관리
-│       └── history_utils.py       # cosine, filter_history_by_relevance
+│   │   ├── ingest.py                  # S3 → Chroma 인제스트
+│   │   ├── qa_cache.py                # Q&A cache (별도 collection)
+│   │   └── chunking/
+│   │       └── extractors/            # PDF/DOCX/PPTX/XLSX/TXT extractors
+│   └── security/                      # injection_detector, content_sanitizer 등
 │
-├── templates/
-│   ├── home.html                  # 홈페이지 (사용자 정보 + 최근 이용)
-│   ├── index.html                 # 채팅 UI
-│   ├── login.html                 # 로그인 페이지
-│   ├── admin_home.html            # 관리자 홈
-│   ├── admin_users.html           # 사용자 관리
-│   └── pending.html               # 승인 대기 안내 페이지
+├── eval/                              # 평가 도구
+│   ├── data/
+│   │   ├── questions.json             # 250문항
+│   │   └── labels.json                # ground truth + 출처 + alternative
+│   ├── runner.py                      # 그래프 실행 (--version v1|v2)
+│   ├── judge.py                       # LLM-as-judge 채점 (Phase I 정교화)
+│   ├── relabel_baseline_v2.py         # 라벨 정정 11건 + UNKNOWN 분모 제외
+│   ├── analyze_grader_threshold.py    # max_score 분포 분석
+│   ├── ablation_grader_threshold.py   # 임계 ablation
+│   ├── test_q229_revised.py           # Q229 case 검증
+│   ├── test_reflection_fix.py         # Reflection 5건 검증
+│   ├── build_qa_cache.py              # labels → Q&A cache 적재
+│   └── results/                       # 평가 결과 저장
 │
-└── static/
-    ├── css/style.css
-    └── js/chat.js
+├── docs/
+│   ├── PHASE_I_RESULTS.md             # ★ Phase I 상세 노트 (변경/결과/한계/다음작업)
+│   └── SESSION_FLOW_2026-05.md
+│
+├── templates/                         # Jinja2 (홈/채팅/관리자)
+└── static/                            # CSS/JS
 ```
-
----
-
-## GraphState 필드
-
-| 필드 | 타입 | 설명 |
-|------|------|------|
-| `input_data` | str | 사용자 입력 (clarification 재개 시 combined 값으로 교체) |
-| `input_embedding` | List[float] | 사용자 입력 임베딩 캐시 |
-| `task_type` | str | 라우팅 결과 카테고리 |
-| `task_args` | Dict | 라우팅 디버그 정보, 검색 문서 등 |
-| `messages` | Sequence[BaseMessage] | 대화 히스토리 (누적 append) |
-| `citations_used` | List[Dict] | 인용된 출처 목록 |
-| `file_context` | str | 업로드 파일 텍스트 (State에 영속화) |
-| `file_context_name` | str | 업로드 파일명 |
-| `retry_count` | int | knowledge search 재시도 횟수 |
-| `clarification_count` | int | clarification 발동 횟수 (루프 방어용, ≥2 → knowledge_search fallback) |
-| `interrupt_type` | str | "clarification" |
-| `pending_confirm_msg` | str | 슬롯 수집 후 확인 메시지 |
-| `trace_id` | str | 요청별 트레이스 ID |
 
 ---
 
 ## 프롬프트 인젝션 방어
 
-Fine-tuning 없이 오케스트레이션 레벨에서 4계층 방어를 구현합니다. 추가 LLM 호출 비용 없이 동작합니다.
+| 레이어 | 위치 | 방식 |
+|---|---|---|
+| **1차** | `security_gate` (그래프 첫 노드) | 임베딩 유사도 + 슬라이딩 윈도우 |
+| **2차** | `router` → `rejected` | LLM 분류 시 범위 외 자동 차단 |
+| **3차** | `retrieve` (chunk sanitize) | RAG 문서 경유 간접 인젝션 차단 |
+| **4차** | `generator` (응답 검증) | 1~3차 통과 후 민감 정보 노출 방지 |
 
-| 레이어 | 위치 | 방식 | 차단 대상 |
-|---|---|---|---|
-| **1차** | `input_guard_node` (그래프 첫 노드) | 임베딩 유사도 + 슬라이딩 윈도우 | 알려진 패턴 · 분할 인젝션 · 소셜 엔지니어링 |
-| **2차** | `task_router` → `rejection_node` | 라우팅 `injection` task_type | Semantic 변형 우회 · 범위 외 질문 |
-| **3차** | `search_node` | RAG 문서 sanitize | 문서 경유 간접 인젝션 |
-| **4차** | `answer_node` | 응답 출력 규칙 기반 검증 | 1~3차 통과 후 민감 정보 노출 |
+LLM 추가 호출 없이 오케스트레이션 레벨에서 동작.
 
-**요청 간 컨텍스트 격리**
+---
 
-각 LLM 호출 노드(knowledge_search, file_chat, ai_guide)는 이전 대화 히스토리를 LLM에 주입하지 않습니다. 요청마다 독립적인 컨텍스트로 처리하여 이전 대화 내용이 현재 답변에 오염되는 것을 방지합니다. 첨부 파일 컨텍스트는 DynamoDB 체크포인터를 통해 별도로 유지됩니다.
+## 평가/벤치마크
+
+`eval/` 디렉토리에서 250문항 평가셋으로 회귀 테스트.
+
+```bash
+# 250문항 실행 (v2 그래프)
+python eval/runner.py --run-name <name> --version v2
+
+# LLM-as-judge 채점
+python eval/judge.py --run <name>
+
+# Q&A cache 빌드 (선택)
+python -m eval.build_qa_cache
+```
+
+평가 결과: `eval/results/<name>__scored.json` (id별 correct + score_value + reasoning).
+
+상세는 [`docs/PHASE_I_RESULTS.md`](docs/PHASE_I_RESULTS.md) 참조.
 
 ---
 
 ## 환경변수
 
-`.env` 파일을 프로젝트 루트에 생성하여 아래 변수를 설정합니다.
+`.env` 파일 또는 ECS task definition에 설정.
 
 ```env
 # AWS
@@ -295,132 +305,117 @@ AWS_REGION=ap-northeast-1
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 
-# DynamoDB 테이블명 (기본값 사용 시 생략 가능)
+# DynamoDB
 USERS_TABLE=langgraph_users
-INTENT_SAMPLES_TABLE=langgraph_intent_samples
-ROUTING_LOG_TABLE=langgraph_routing_logs
 CHECKPOINT_TABLE=langgraph_checkpoints
+CREATE_USERS_TABLE=0          # ECS에선 0 (사전 생성)
+CREATE_INTENT_SAMPLES_TABLE=0
+CREATE_ROUTING_LOG_TABLE=0
 
-# DynamoDB 테이블 자동 생성 여부
-CREATE_USERS_TABLE=1
-CREATE_INTENT_SAMPLES_TABLE=1
-CREATE_ROUTING_LOG_TABLE=1
-
-# Google AI
+# Google AI (Secrets Manager에서 주입 권장)
+GEMINI_API_KEY=...
 GOOGLE_API_KEY=...
 
-# S3 (문서 인제스트)
-S3_KNOWLEDGE_BUCKET=...
-S3_KNOWLEDGE_PREFIX=knowledge_data/
-
-# 세션
+# Session (Secrets Manager)
 SESSION_SECRET=...
+
+# S3 (문서 인제스트)
+S3_KNOWLEDGE_BUCKET=langgraph-rag-...
+S3_KNOWLEDGE_PREFIX=knowledge_data/
+KNOWLEDGE_DIR=/app/knowledge_data
+AUTO_INGEST=1
+
+# Chroma (EFS 마운트)
+CHROMA_DB_PATH=/mnt/chroma
+CHROMA_COLLECTION=my_knowledge
 
 # LLM
 LLM_MODEL=gemini-3-flash-preview
 LLM_TEMPERATURE=0
 LLM_MAX_OUTPUT_TOKENS=4096
 
-# RAG 검색 품질
-RETRIEVAL_MIN_RELEVANCE=0.3
+# Retrieval
+RETRIEVAL_TOP_K=10
+RETRIEVAL_MIN_RELEVANCE=0.55
 RETRIEVAL_MAX_DISTANCE=0.75
-RETRIEVAL_TOP_K=5
 
-# 인제스트
-KNOWLEDGE_DIR=./knowledge_data
-AUTO_INGEST=1
+# Chunking
 INGEST_CHUNK_MAX_CHARS=1200
+INGEST_CHUNK_OVERLAP=200
 
-# 대화 히스토리
-HISTORY_MAX_MESSAGES=40
-HISTORY_RELEVANCE_THRESHOLD=0.40
-HISTORY_ALWAYS_KEEP_LAST_N=0
-CHECKPOINT_TTL_DAYS=7
-CHECKPOINT_MAX_MESSAGES=40
-
-# 프롬프트 인젝션 방어 임계값
-INJECTION_THRESHOLD_SINGLE=0.80
-INJECTION_THRESHOLD_COMBINED=0.76
-INJECTION_WINDOW_TURNS=3
-
-# 라우터 임계값
-ROUTER_TOP1_MIN=0.62
-ROUTER_MARGIN_MIN=0.08
-
-# 그래프 순환 제한
-# recursion_limit=15 (main.py 하드코딩, 변경 시 코드 수정)
+# Cross-encoder reranker
+RERANK_MODEL=BAAI/bge-reranker-v2-m3
+RERANK_RELEVANT_THRESHOLD=0.5
+RERANK_PARTIAL_THRESHOLD=0.3
+RERANK_MAX_LENGTH=512
 ```
 
 ---
 
-## DevOps 전체 플로우
+## DevOps 플로우
 
-### [0단계] 인프라 사전 준비 (최초 1회)
+### 인프라 (최초 1회)
 
 ```
 AWS Console / CLI
-  ├── Amazon ECR       — Docker 이미지 레포지토리 생성
-  ├── AWS App Runner   — ECR 이미지 기반 서비스 생성 + 환경변수 설정
-  ├── Amazon DynamoDB  — 앱 기동 시 테이블 자동 생성 (CREATE_*_TABLE=1)
-  └── Amazon S3        — 사내 문서 원본 업로드 (S3_KNOWLEDGE_BUCKET)
+  ├── Amazon ECR              — Docker 이미지 레포지토리
+  ├── Amazon ECS Fargate      — 클러스터 + 서비스 + task definition
+  ├── Amazon EFS              — Chroma DB 영속 스토리지
+  ├── Application Load Balancer — HTTPS 종단
+  ├── Amazon DynamoDB         — langgraph_users, langgraph_checkpoints
+  ├── Amazon S3               — 사내 문서 원본
+  └── AWS Secrets Manager     — Gemini API key, session secret
 
-GitHub 레포 → Settings → Secrets and variables → Actions
+GitHub Secrets
   ├── AWS_ACCESS_KEY_ID
   ├── AWS_SECRET_ACCESS_KEY
   ├── AWS_REGION
   ├── ECR_REPOSITORY
-  └── APP_RUNNER_SERVICE_ARN
+  ├── ECS_CLUSTER
+  └── ECS_SERVICE
 ```
 
-### [1단계] 로컬 개발
+### CI/CD (`.github/workflows/deploy.yml`)
+
+`main` 브랜치 push 시 자동:
+
+```
+1. checkout + AWS 자격증명
+2. ECR 로그인
+3. Docker 이미지 빌드 (cross-encoder 모델 사전 bake)
+4. ECR 푸시 (커밋 SHA 태그 + latest)
+5. ECS task definition 업데이트
+6. ECS service update-service → 신규 task 배포
+```
+
+### 컨테이너 기동 시
+
+```
+FastAPI 앱 시작 (main.py)
+  ├── DynamoDB checkpointer 초기화
+  ├── intent_samples seed upsert
+  ├── S3 → Chroma 인제스트 (AUTO_INGEST=1, 변경 분만)
+  ├── Cross-encoder reranker 사전 로드 (Dockerfile에서 bake됨)
+  └── FastAPI 서버 ready (port 8080)
+```
+
+### 로컬 개발
 
 ```bash
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-> `knowledge_data/`와 `chroma_db/`는 로컬 테스트 전용입니다.
-> 운영 환경(App Runner)에서는 S3에서 자동 인제스트되며, 재배포 시 초기화됩니다.
-
-### [2단계] 배포 트리거
-
-```bash
-git push origin main
-```
-
-`main` 브랜치에 push하면 GitHub Actions (`.github/workflows/deploy.yml`)가 자동으로 기동됩니다.
-
-### [3단계] GitHub Actions (ubuntu-latest runner)
-
-```
-runner VM 기동
-    ├── 1. 코드 체크아웃
-    ├── 2. AWS 자격증명 구성
-    ├── 3. Amazon ECR 로그인
-    ├── 4. Docker 이미지 빌드
-    ├── 5. ECR 푸시 (커밋 SHA 태그 + latest)
-    ├── 6. App Runner RUNNING 상태 대기 (최대 10분)
-    └── 7. App Runner 배포 트리거
-```
-
-### [4단계] 컨테이너 초기화 (앱 기동 시 자동 수행)
-
-```
-FastAPI 앱 시작 (main.py)
-    ├── DynamoDB 테이블 자동 생성
-    ├── intent_samples seed 데이터 upsert
-    ├── S3 → Chroma 문서 인제스트 (AUTO_INGEST=1)
-    └── FastAPI 서버 Ready
-```
+> 첫 실행 시 cross-encoder 모델(~600MB) 다운로드 + Chroma 인덱싱.
 
 ---
 
 ## 관리자 기능
 
 - `/admin` — 관리자 홈
-- `/admin/users` — 사용자 목록 조회, 승인/거절, 관리자 권한 토글, 소속(department) 지정, 계정 삭제
+- `/admin/users` — 사용자 승인/거절, 관리자 권한 토글, 소속 지정, 계정 삭제
 
-라우팅 이력은 DynamoDB `routing_logs` 테이블에 요청별로 기록됩니다.
+라우팅 이력은 DynamoDB `routing_logs` 테이블에 기록.
 
 ---
 
