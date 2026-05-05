@@ -9,9 +9,33 @@ Generator node — 검색 결과 기반 답변 생성 + Citation 부착 (FR-401,
 from __future__ import annotations
 
 import re
+import urllib.parse
 from typing import Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+
+def _decode_urls_in_answer(text: str) -> str:
+    """답변 안의 URL-encoded segment(@%XX… 또는 %XX…)를 한글로 디코드.
+
+    chunk 원문에 인코딩된 URL이 있을 때 사용자 가독성 향상.
+    """
+    if not text or "%" not in text:
+        return text
+
+    def _decode(m: re.Match) -> str:
+        seg = m.group(0)
+        try:
+            decoded = urllib.parse.unquote(seg)
+            # 디코딩 후 사람이 읽을 수 있는 한글/문자가 나타나면 사용
+            if decoded != seg and re.search(r"[가-힣a-zA-Z]", decoded):
+                return decoded
+        except Exception:
+            pass
+        return seg
+
+    # @로 시작하는 채널/사용자명 또는 일반 %xx 시퀀스 (3개 이상 연속)
+    return re.sub(r"@?(?:%[0-9A-Fa-f]{2}){3,}", _decode, text)
 
 from app.core.config import get_llm
 from app.graph_v2.states.state import Citation, GraphState
@@ -26,11 +50,24 @@ _COMMON_PRINCIPLES = """【핵심 원칙】
 1. 수치·고유명사·인용 문구는 검색 결과 그대로 (verbatim, paraphrase 금지).
 2. 질문이 묻는 것만 답하세요. 관련 배경·추가 설명은 절대 추가 금지.
 3. 모든 사실 진술 뒤에 [N] citation 부착. 부착할 수 없는 진술은 작성 금지.
-4. 답변 작성 전 내부 확인:
-   - 답에 포함될 모든 단어가 검색 결과의 어느 chunk에 있는가?
-   - 질문의 entity와 chunk entity가 일치하는가?
-5. 검색 결과에 답이 없으면 "관련 사내 문서를 찾을 수 없습니다."
-6. 답변 시작에 '~는 다음과 같습니다:' 같은 서두 금지 — 바로 답.
+4. 검색 결과에 답이 없으면 "관련 사내 문서를 찾을 수 없습니다."
+5. 답변 시작에 '~는 다음과 같습니다:' 같은 서두 금지 — 바로 답.
+
+【답변 작성 전 4단계 자기검증】 (반드시 수행)
+1. **질문 entity 식별**: 질문이 묻는 정확한 대상(예: "체크리스트 8번 항목" / "Day 3 산출물 중 발표" / "프로젝트 수행 단계의 평가 주체")을 한 줄로 명시.
+2. **chunk entity 매칭**: 검색 결과 chunks 중 질문 entity와 정확히 매칭되는 chunk만 골라내시오.
+   - 비슷하지만 다른 entity의 chunk는 사용 금지 (예: 질문이 "체크리스트 8번"인데 "체크리스트 슬라이드 활용법"을 답하지 말 것).
+   - 같은 단어가 등장해도 다른 맥락이면 무관.
+3. **답변 facet 일치**: 답변이 질문의 정확한 facet을 답하는가?
+   - 질문이 "구분"을 물으면 "구분"만, "의미"를 물으면 "의미"만, "표기"를 물으면 "표기"만 답.
+   - 다른 facet(특성, 이유, 배경)을 답하면 오답으로 간주됨.
+4. **불필요 정보 제거**: 답변 작성 후 정답에 직접 기여 안 하는 모든 문장·항목을 제거.
+   - 예: 정답이 "성과 기반 보증"이면 "프로젝트 성공에 연동된 운영 수익 모델"은 paraphrase로 부족, verbatim 필수.
+   - "추가 정보를 친절히 알려주는 것"이 답을 망친다 — **간결성 > 풍부함**.
+
+【extra info 금지 사례】
+- 질문 "12시간 내 빠른 매칭 강조 플랫폼은?" / 정답 "원티드긱스" / X 답변: "원티드긱스 [1]. 그 외 AI 자동 매칭 시스템 [1], 1:1 매니징 [2]…" → AI 매칭/매니징 부분이 extra info.
+- 질문 "구분과 의미는?" / 정답 "구분: 협의, 의미: 강사 더 효과적 방식" / X 답변: 정답 + "협의는 강사와 조율 사항을 뜻합니다" → 마지막 문장 불필요.
 """
 
 _PROMPT_BY_TYPE = {
@@ -55,6 +92,14 @@ _PROMPT_BY_TYPE = {
 - **다른 슬라이드/페이지의 다른 주제 항목 절대 추가 금지.** 같은 chunk 안에 있는 동일 주제 항목만 사용.
 - 예: "• 차별성 [1]\\n• 베네핏 [1]\\n• 행동 유발 [1]"
 - N이 명시되지 않은 경우 검색 결과에 있는 모든 항목을 나열.
+
+【list_n soft completion — N개 다 못 찾은 경우】
+- 질문이 N개 요구하지만 검색 결과에서 명백히 N개 모두 찾을 수 없으면:
+  1. 찾은 M개만 verbatim으로 답.
+  2. 답변 마지막에 한 줄로 명시: "(검색 결과에서 {N-M}개 항목은 확인되지 않음)"
+- 절대 hallucination으로 빈 자리를 채우지 말 것.
+- 예: 정답 5개 요구, chunk에 1개만 있을 때
+  → "• 최저의 진입장벽 [1]\\n(검색 결과에서 4개 항목은 확인되지 않음)"
 
 【list_n 자기검증 4단계】 (답변 작성 직전 반드시 수행)
 1. 질문에서 N 추출 (예: "3가지", "4개", "각 단계" → 모든 항목)
@@ -161,6 +206,9 @@ def generator_node(state: GraphState) -> dict:
 
     if not answer:
         answer = "관련 사내 문서를 찾을 수 없습니다. 다른 키워드로 검색해 보시거나 담당 부서에 문의해 주세요."
+
+    # URL-encoded segment 디코딩 (가독성)
+    answer = _decode_urls_in_answer(answer)
 
     cited_ids = _extract_cited_ids(answer)
     citations = _build_citations(docs, cited_ids)

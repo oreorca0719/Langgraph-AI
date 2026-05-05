@@ -152,13 +152,28 @@ def _check_list_n_consistency(question: str, answer: str, docs: list[Document]) 
 
 _REFLECTION_PROMPT = """당신은 사내 RAG 시스템의 답변 자기검증 평가자입니다.
 
+【검증 절차 — 반드시 순서대로】
+1. 답변에서 핵심 사실(fact) 또는 entity를 모두 추출하시오 (3~5개).
+2. 각 fact에 대해 chunks 어느 부분에 해당 의미가 등장하는지 짚으시오.
+   - 의역·요약·축약·바꿔쓰기도 의미가 보존되면 supported로 간주.
+   - 답변의 인용 [N]은 chunks의 [N]번을 가리킴 (1-based).
+   - 답변의 인용 인덱스가 잘못됐어도 다른 chunk에 해당 fact가 있으면 supported.
+3. 위 분석을 토대로 점수 산출.
+
 【평가 항목】 (각 0.0~1.0)
-1. groundedness: 답변이 검색 결과에서 도출됐는가 (0=완전히 추측, 1=모두 검색 결과 기반)
+1. groundedness: 답변의 fact 중 chunks에서 매칭된 비율
+   - 100% 매칭 → 1.0
+   - 75% 매칭 → 0.75
+   - 일부만 → 0.3~0.6
+   - 전혀 매칭 안 됨 → 0.0
 2. relevance: 답변이 원 질문에 답하는가 (0=무관, 1=정확히 답)
-3. hallucination_risk: 검색 결과에 없는 사실이 답변에 있는가 (0=없음, 1=명백 환각)
+3. hallucination_risk: chunks에 명백히 없고 사실로 검증할 수 없는 새 fact 도입 여부
+   - 단, supportive sub-fact (질문 외 추가 맥락)는 hallucination이 아님
 
 【출력】 JSON만:
 {
+  "matched_facts": [{"fact": "...", "chunk_idx": 1, "evidence": "..."}],
+  "unmatched_facts": ["chunks에 없는 fact"],
   "groundedness": 0.0~1.0,
   "relevance": 0.0~1.0,
   "hallucination_risk": 0.0~1.0,
@@ -166,14 +181,19 @@ _REFLECTION_PROMPT = """당신은 사내 RAG 시스템의 답변 자기검증 �
   "reason": "한 줄 요약"
 }
 
-passed 기준: groundedness >= 0.7 AND relevance >= 0.7 AND hallucination_risk <= 0.3
+passed 기준: groundedness >= 0.6 AND relevance >= 0.7 AND hallucination_risk <= 0.4
 """
 
 
 def _call_reflection_llm(question: str, answer: str, docs: list[Document]) -> dict:
     if not answer or not docs:
         return {}
-    chunks_text = "\n".join(f"[{i}] {(d.content or '')[:400]}" for i, d in enumerate(docs[:5]))
+    # 1-based 인덱싱 (generator citation [1], [2]…와 정렬)
+    # chunks 절단 400→1500자 (Gemini Flash 3 context 충분)
+    chunks_text = "\n".join(
+        f"[{i}] {(d.content or '')[:1500]}"
+        for i, d in enumerate(docs[:5], start=1)
+    )
     user_content = (
         f"[질문]\n{question}\n\n"
         f"[검색 결과 chunks]\n{chunks_text}\n\n"
@@ -258,8 +278,18 @@ def reflection_node(state: GraphState) -> dict:
 
 
 def route_after_reflection(state: GraphState) -> str:
+    """fail 시 replan 결정.
+
+    효율화: groundedness가 합리적 수준(>=0.5)인데 fail이면 같은 chunks로
+    재 retrieval해도 결과 거의 동일. 무용한 replan 비용 차단 → end.
+    완전히 grounded되지 않은(g<0.5) 케이스만 replan으로.
+    """
     if not state.verification:
         return "end"
-    if state.verification.needs_replan() and state.replan_iterations < 1:
+    v = state.verification
+    if not v.passed and state.replan_iterations < 1:
+        # g >= 0.5: 답이 어느 정도 chunks 기반. replan 무의미 → end
+        if v.groundedness >= 0.5:
+            return "end"
         return "replan"
     return "end"

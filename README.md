@@ -6,12 +6,42 @@
 
 ---
 
+## 최신 성능 (Phase I, 2026-05) — v2 그래프
+
+250문항 평가셋 기준:
+
+| 지표 | v2 baseline | **v2_phaseI (현재)** | 변화 |
+|---|---|---|---|
+| Raw judge 정확도 | 82.80% | **91.20%** | +8.40%p |
+| 시스템 자체 효과 (judge 변경 차감) | 82.80% | **88.80%** | +6.00%p |
+| 실사용자 기준 (UNKNOWN/모호 제외) | 84.08% | **92.65%** | +8.57%p |
+| 평균 elapsed/문항 | 35.09s | **28.67s** | -18.3% |
+| 평균 LLM 호출/문항 | 4.64 | 3.99 | -14.0% |
+| 평균 replan/문항 | 0.34 | **0.14** | -60.4% |
+
+**주요 변경**:
+- **Reflection 수정**: 인덱싱 1-based, chunks 1500자, CoT prompt, replan 효율화
+- **Generator 강화**: 4단계 자기검증, list_n soft completion, URL 디코딩
+- **Judge prompt 정교화**: 과엄격 금지 규칙 (실사용자 만족 기준)
+
+**알려진 한계**:
+- PPT 비교 표 평탄화 결함 8건 미해결 (다음 라운드 대상)
+- Judge prompt는 평가셋 케이스에 직접 적합 → overfitting risk 존재
+- 진짜 raw 개선치는 +6.00%p, +2.40%p는 평가 방법론 정교화 효과
+
+상세 변경·결과·다음 라운드 작업: [`docs/PHASE_I_RESULTS.md`](docs/PHASE_I_RESULTS.md)
+
+---
+
 ## 개요
 
 사내 임직원을 위한 AI 어시스턴트 웹 애플리케이션입니다.
-사용자 질문 의도를 다단계 라우터(Rule + Semantic + LLM Fallback)로 분류하여, **사내 문서 검색 (RAG) · 심화 검색 · 파일 분석** 3가지 기능을 단일 채팅 인터페이스에서 제공합니다.
+사용자 질문 의도를 다단계 라우터(Semantic + LLM)로 분류하여, **사내 문서 검색 (Agentic RAG) · 심화 검색 · 파일 분석** 3가지 기능을 단일 채팅 인터페이스에서 제공합니다.
 
-LangGraph의 순환(Cycle), interrupt(slot 기반 의도 확인), DynamoDB 체크포인터 영속화를 활용한 플랫 그래프 구조로 구현되어 있습니다.
+**현재 운영**: v2 그래프 (`app/graph_v2`) — Self-RAG 패턴(grader → reflection → replan loop) 기반 자가검증 RAG.
+**라이브러리**: LangGraph의 순환·conditional edge·DynamoDB 체크포인터 영속화 활용.
+
+> **v1 그래프 (`app/graph`)**: 13-노드 플랫 구조, clarification interrupt 기반. 현재 평가용으로만 유지. 운영은 v2.
 
 ---
 
