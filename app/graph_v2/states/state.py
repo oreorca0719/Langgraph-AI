@@ -40,7 +40,7 @@ RoutingDecision = str  # "no_retrieval" | "single_retrieval" | "multi_hop_retrie
 class Citation(BaseModel):
     id: int
     doc_id: str             # 출처 문서 ID (Retriever에서 부여)
-    snippet: str            # 발췌 (~200자)
+    snippet: str            # 답변 근거가 된 chunk 전체 내용
     score: float = 0.0      # 0~1 정규화 (FR-204)
     location: str = ""      # "Slide 3", "Page 2" 등
 

@@ -154,7 +154,7 @@ def _build_citations(docs: list[Document], cited_ids: set[int]) -> list[Citation
         out.append(Citation(
             id=i,
             doc_id=d.metadata.get("doc_id", d.source),
-            snippet=(d.content or "")[:200],
+            snippet=(d.content or ""),
             score=d.score,
             location=d.metadata.get("location", ""),
         ))

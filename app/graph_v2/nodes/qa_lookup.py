@@ -41,7 +41,7 @@ def qa_lookup_node(state: GraphState) -> dict:
         citation = Citation(
             id=1,
             doc_id=hit.doc_id or "qa_cache",
-            snippet=hit.snippet[:200],
+            snippet=hit.snippet,
             score=hit.score,
             location=hit.location,
         )

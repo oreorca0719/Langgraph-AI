@@ -30,6 +30,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, END
 
 from app.core.config import get_llm
+from app.core.history_utils import extract_text_content
 from app.graph_v2.states.state import GraphState
 from app.graph_v2.nodes.security import security_gate_node, route_after_security
 from app.graph_v2.nodes.router import router_node, route_by_decision
@@ -50,7 +51,7 @@ def _no_retrieval_answer_node(state: GraphState) -> dict:
     )
     try:
         resp = get_llm().invoke([SystemMessage(content=sys), HumanMessage(content=user_input)])
-        ans = str(resp.content).strip() if resp.content else "안녕하세요. Kaiper AI 사내 어시스턴트입니다."
+        ans = extract_text_content(resp.content) or "안녕하세요. Kaiper AI 사내 어시스턴트입니다."
     except Exception:
         ans = "안녕하세요. Kaiper AI 사내 어시스턴트입니다."
     return {
@@ -95,7 +96,7 @@ def _file_chat_node(state: GraphState) -> dict:
     )
     try:
         resp = get_llm().invoke([SystemMessage(content=sys), HumanMessage(content=user_input)])
-        ans = str(resp.content).strip() if resp.content else "응답을 생성하지 못했습니다."
+        ans = extract_text_content(resp.content) or "응답을 생성하지 못했습니다."
     except Exception as e:
         ans = f"파일 분석 중 오류가 발생했습니다: {e}"
     return {
