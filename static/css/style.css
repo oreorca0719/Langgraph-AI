@@ -48,9 +48,10 @@ body {
   padding-right: calc(20px + 24px);
 }
 
+/* 기본값: 라이트 배경 위 검정 계열 */
 .eyebrow {
   margin: 0;
-  color: rgba(255, 255, 255, 0.8);
+  color: var(--text-dim);
   font-size: 12px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -61,11 +62,17 @@ body {
   margin: 6px 0 0;
   font-size: clamp(22px, 2.8vw, 34px);
   letter-spacing: -0.03em;
-  color: white;
+  color: var(--text);
 }
 
-.title {
-  color: var(--text);
+/* 다크 헤더(.topbar) 안에서만 흰색으로 오버라이드 */
+.topbar .eyebrow {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.topbar .title,
+.topbar .panel-title {
+  color: white;
 }
 
 .panel-subtitle {
@@ -326,7 +333,7 @@ button {
 }
 
 .auth-panel {
-  max-width: 460px;
+  max-width: 560px;
 }
 
 .form-stack {
@@ -386,8 +393,8 @@ button {
 .admin-table td {
   border-bottom: 1px solid var(--line);
   padding: 10px;
-  text-align: left;
-  vertical-align: top;
+  text-align: center;
+  vertical-align: middle;
 }
 
 .admin-table th {

@@ -6,12 +6,13 @@
   <title>사용자 관리 | Kaiper</title>
   <link rel="stylesheet" href="/static/css/style.css" />
   <style>
-    /* ✅ 액션 버튼 — 그리드로 고정 위치 */
+    /* ✅ 액션 버튼 — 그리드로 고정 위치 + td 내부 가운데 정렬 */
     .actions-cell {
       display: grid !important;
       grid-template-columns: 90px 100px 70px;
       gap: 6px;
       white-space: nowrap;
+      justify-content: center;
     }
     .actions-cell .col-approve { grid-column: 1; }
     .actions-cell .col-admin { grid-column: 2; }
