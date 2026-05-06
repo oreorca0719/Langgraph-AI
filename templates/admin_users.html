@@ -5,6 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>사용자 관리 | Kaiper</title>
   <link rel="stylesheet" href="/static/css/style.css" />
+  <style>
+    /* ✅ 액션 버튼 — 그리드로 고정 위치 */
+    .actions-cell {
+      display: grid !important;
+      grid-template-columns: 90px 100px 70px;
+      gap: 6px;
+      white-space: nowrap;
+    }
+    .actions-cell .col-approve { grid-column: 1; }
+    .actions-cell .col-admin { grid-column: 2; }
+    .actions-cell .col-delete { grid-column: 3; }
+    .actions-cell .inline-form { display: contents; }
+    .actions-cell button { width: 100%; padding: 6px 10px; font-size: 12px; }
+    /* 읽기전용 알림 — 라이트테마용 앰버 */
+    .readonly-alert {
+      margin-bottom: 16px; padding: 10px 14px;
+      background: rgba(217, 119, 6, 0.08);
+      border: 1px solid rgba(217, 119, 6, 0.3);
+      border-radius: 8px; font-size: 13px;
+      color: #b45309;
+    }
+  </style>
 </head>
 <body class="page-admin">
   <main class="panel admin-panel">
@@ -22,8 +44,8 @@
     </header>
 
     {% if read_only %}
-    <div style="margin-bottom:16px;padding:10px 14px;background:rgba(255,201,102,0.1);border:1px solid rgba(255,201,102,0.3);border-radius:8px;font-size:13px;color:#ffc966;">
-      읽기 전용 모드 — 데이터 조회만 가능합니다.
+    <div class="readonly-alert">
+      ⚠ 읽기 전용 모드 — 데이터 조회만 가능합니다.
     </div>
     {% endif %}
 
@@ -40,7 +62,8 @@
           </tr>
         </thead>
         <tbody>
-          {% for u in users %}
+          {# ✅ 정렬: 관리자 최상단 → 그 외 사용자는 이름 내림차순 #}
+          {% for u in (users|sort(attribute='name', reverse=true)|sort(attribute='is_admin', reverse=true)) %}
           <tr>
             <td>{{ u.email }}</td>
             <td>{{ u.name }}</td>
@@ -60,40 +83,43 @@
             <td>{{ u.is_admin }}</td>
             <td class="actions-cell">
               {% if not read_only %}
+              {# 1열: 승인 / 승인해제 #}
               {% if not u.approved %}
-              <form method="post" action="/admin/users/approve" class="inline-form">
+              <form method="post" action="/admin/users/approve" class="inline-form col-approve">
                 <input type="hidden" name="email" value="{{ u.email }}" />
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <button type="submit">승인</button>
+                <button type="submit" class="col-approve">승인</button>
               </form>
               {% else %}
-              <form method="post" action="/admin/users/reject" class="inline-form">
+              <form method="post" action="/admin/users/reject" class="inline-form col-approve">
                 <input type="hidden" name="email" value="{{ u.email }}" />
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <button type="submit">승인해제</button>
+                <button type="submit" class="col-approve">승인해제</button>
               </form>
               {% endif %}
 
+              {# 2열: 관리자부여 / 관리자해제 #}
               {% if u.is_admin %}
-              <form method="post" action="/admin/users/toggle-admin" class="inline-form">
+              <form method="post" action="/admin/users/toggle-admin" class="inline-form col-admin">
                 <input type="hidden" name="email" value="{{ u.email }}" />
                 <input type="hidden" name="make_admin" value="0" />
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <button type="submit">관리자해제</button>
+                <button type="submit" class="col-admin">관리자해제</button>
               </form>
               {% else %}
-              <form method="post" action="/admin/users/toggle-admin" class="inline-form">
+              <form method="post" action="/admin/users/toggle-admin" class="inline-form col-admin">
                 <input type="hidden" name="email" value="{{ u.email }}" />
                 <input type="hidden" name="make_admin" value="1" />
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <button type="submit">관리자부여</button>
+                <button type="submit" class="col-admin">관리자부여</button>
               </form>
               {% endif %}
 
-              <form method="post" action="/admin/users/delete" class="inline-form" onsubmit="return confirm('정말 삭제하시겠습니까? ({{ u.email }})');">
+              {# 3열: 삭제 #}
+              <form method="post" action="/admin/users/delete" class="inline-form col-delete" onsubmit="return confirm('정말 삭제하시겠습니까? ({{ u.email }})');">
                 <input type="hidden" name="email" value="{{ u.email }}" />
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <button type="submit" class="danger-btn">삭제</button>
+                <button type="submit" class="danger-btn col-delete">삭제</button>
               </form>
               {% else %}
               <span style="color:var(--text-dim);font-size:12px;">—</span>

@@ -1,15 +1,17 @@
-﻿:root {
-  --bg: #071121;
-  --bg-soft: #0e1b32;
-  --surface: rgba(13, 27, 46, 0.7);
-  --surface-strong: rgba(15, 33, 56, 0.92);
-  --line: rgba(155, 194, 255, 0.2);
-  --text: #e9f2ff;
-  --text-dim: #99afcc;
-  --primary: #57d0ff;
-  --primary-strong: #2aa8dc;
-  --accent: #7cf0c8;
+:root {
+  --bg: #f5f7fa;
+  --bg-soft: #edf2f7;
+  --surface: rgba(237, 242, 247, 0.9);
+  --surface-strong: rgba(245, 247, 250, 0.98);
+  --line: rgba(0, 26, 77, 0.1);
+  --text: #1a202c;
+  --text-dim: #4a5568;
+  --primary: #5a9ca4;
+  --primary-strong: #4a8a92;
+  --accent: #5a9ca4;
   --danger: #ff6f8f;
+  --header-bg: #001a4d;
+  --header-bg-dark: #000a1e;
 }
 
 * {
@@ -21,10 +23,7 @@ body {
   min-height: 100vh;
   font-family: "Segoe UI", "Noto Sans KR", sans-serif;
   color: var(--text);
-  background:
-    radial-gradient(circle at 10% -15%, #1a4a7c, transparent 45%),
-    radial-gradient(circle at 90% 5%, #17435a, transparent 38%),
-    linear-gradient(165deg, #060d19, #0a1628 46%, #0d1e35);
+  background: var(--bg);
 }
 
 .app-shell {
@@ -39,11 +38,19 @@ body {
   align-items: center;
   gap: 16px;
   margin-bottom: 18px;
+  background: linear-gradient(135deg, var(--header-bg) 0%, #003d99 100%);
+  padding: 16px 24px;
+  border-radius: 12px;
+  margin-left: -20px;
+  margin-right: -20px;
+  margin-top: -24px;
+  padding-left: calc(20px + 24px);
+  padding-right: calc(20px + 24px);
 }
 
 .eyebrow {
   margin: 0;
-  color: var(--accent);
+  color: rgba(255, 255, 255, 0.8);
   font-size: 12px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -54,6 +61,11 @@ body {
   margin: 6px 0 0;
   font-size: clamp(22px, 2.8vw, 34px);
   letter-spacing: -0.03em;
+  color: white;
+}
+
+.title {
+  color: var(--text);
 }
 
 .panel-subtitle {
@@ -71,9 +83,9 @@ body {
 .logout-btn,
 .primary-btn,
 .actions-cell button {
-  border: 1px solid var(--line);
-  color: var(--text);
-  background: rgba(19, 39, 66, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   padding: 9px 14px;
   text-decoration: none;
@@ -86,13 +98,13 @@ body {
 .primary-btn:hover,
 .actions-cell button:hover {
   transform: translateY(-1px);
-  border-color: rgba(125, 221, 255, 0.5);
-  background: rgba(23, 50, 82, 0.95);
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.15);
 }
 
 #chat-box {
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, rgba(12, 27, 47, 0.58), rgba(10, 23, 40, 0.75));
+  background: var(--bg-soft);
   border-radius: 18px;
   min-height: calc(100vh - 270px);
   max-height: calc(100vh - 250px);
@@ -101,7 +113,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  backdrop-filter: blur(8px);
 }
 
 .message {
@@ -115,8 +126,9 @@ body {
   max-width: min(74%, 820px);
   padding: 12px 16px;
   border-radius: 14px 14px 4px 14px;
-  background: linear-gradient(140deg, rgba(65, 163, 214, 0.35), rgba(74, 199, 164, 0.28));
-  border: 1px solid rgba(113, 214, 255, 0.35);
+  background: rgba(90, 156, 164, 0.15);
+  border: 1px solid rgba(90, 156, 164, 0.3);
+  color: var(--text);
 }
 
 .message.bot {
@@ -131,15 +143,16 @@ body {
   height: 30px;
   border-radius: 50%;
   flex: 0 0 auto;
-  background: linear-gradient(145deg, #58d5ff, #4b6eff 58%, #7af5cb);
-  box-shadow: 0 0 0 3px rgba(63, 122, 204, 0.2);
+  background: linear-gradient(145deg, #5a9ca4, #4a8a92);
+  box-shadow: 0 0 0 3px rgba(90, 156, 164, 0.15);
 }
 
 .message .content {
-  background: var(--surface);
+  background: white;
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 12px 14px;
+  color: var(--text);
 }
 
 .message-title {
@@ -156,8 +169,8 @@ body {
   right: 0;
   bottom: 0;
   padding: 14px 20px 18px;
-  background: linear-gradient(180deg, rgba(8, 17, 31, 0.08), rgba(7, 16, 29, 0.95) 42%);
-  backdrop-filter: blur(9px);
+  background: white;
+  border-top: 1px solid var(--line);
 }
 
 .input-wrapper {
@@ -169,7 +182,7 @@ body {
   padding: 10px 12px;
   border-radius: 14px;
   border: 1px solid var(--line);
-  background: var(--surface-strong);
+  background: white;
 }
 
 input {
@@ -182,7 +195,7 @@ input {
 }
 
 input::placeholder {
-  color: #7890b5;
+  color: #a0aec0;
 }
 
 button {
@@ -192,11 +205,13 @@ button {
 #send-btn,
 .primary-btn {
   background: linear-gradient(150deg, var(--primary), var(--primary-strong));
-  color: #031524;
+  color: white;
   border: none;
   font-weight: 700;
   border-radius: 11px;
-  padding: 9px 14px;
+  padding: 9px 18px;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 #send-btn:disabled {
@@ -223,8 +238,8 @@ button {
 #file-badge {
   display: inline-flex;
   align-items: center;
-  background: rgba(87, 208, 255, 0.12);
-  border: 1px solid rgba(87, 208, 255, 0.3);
+  background: rgba(90, 156, 164, 0.12);
+  border: 1px solid rgba(90, 156, 164, 0.3);
   border-radius: 8px;
   color: var(--primary);
   font-size: 12px;
@@ -251,7 +266,7 @@ button {
 .sources {
   margin-top: 10px;
   border: 1px solid var(--line);
-  background: rgba(8, 20, 34, 0.75);
+  background: var(--surface);
   border-radius: 10px;
   padding: 8px 10px;
 }
@@ -265,7 +280,7 @@ button {
 .source-item + .source-item {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px dashed rgba(160, 200, 255, 0.22);
+  border-top: 1px dashed var(--line);
 }
 
 .source-title {
@@ -291,14 +306,14 @@ button {
   border-radius: 10px;
   padding: 7px 10px;
   color: var(--text);
-  background: rgba(14, 35, 61, 0.86);
+  background: white;
   cursor: pointer;
   font-size: 12px;
 }
 
 .task-option-btn:hover {
-  border-color: rgba(125, 221, 255, 0.52);
-  background: rgba(21, 49, 80, 0.95);
+  border-color: var(--primary);
+  background: var(--surface);
 }
 
 .panel {
@@ -307,7 +322,7 @@ button {
   padding: 28px;
   border: 1px solid var(--line);
   border-radius: 18px;
-  background: var(--surface-strong);
+  background: white;
 }
 
 .auth-panel {
@@ -329,7 +344,8 @@ button {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 11px;
-  background: rgba(10, 25, 44, 0.8);
+  background: white;
+  color: var(--text);
 }
 
 .alert.error {
@@ -337,8 +353,8 @@ button {
   border: 1px solid rgba(255, 111, 143, 0.5);
   border-radius: 10px;
   padding: 10px;
-  background: rgba(126, 35, 56, 0.2);
-  color: #ffb9c8;
+  background: rgba(255, 111, 143, 0.1);
+  color: #d84848;
 }
 
 .link-btn {
@@ -363,11 +379,12 @@ button {
   border-collapse: collapse;
   border: 1px solid var(--line);
   font-size: 14px;
+  background: white;
 }
 
 .admin-table th,
 .admin-table td {
-  border-bottom: 1px solid rgba(150, 190, 252, 0.14);
+  border-bottom: 1px solid var(--line);
   padding: 10px;
   text-align: left;
   vertical-align: top;
@@ -376,6 +393,7 @@ button {
 .admin-table th {
   color: var(--text-dim);
   font-weight: 600;
+  background: var(--surface);
 }
 
 .actions-cell {
@@ -391,7 +409,8 @@ button {
 
 .actions-cell .danger-btn {
   border-color: rgba(255, 111, 143, 0.6);
-  color: #ffd9e1;
+  color: #d84848;
+  background: rgba(255, 111, 143, 0.08);
 }
 
 @keyframes fadeInUp {
@@ -409,6 +428,13 @@ button {
 @media (max-width: 768px) {
   .app-shell {
     padding: 16px 12px 120px;
+  }
+
+  .topbar {
+    margin-left: -12px;
+    margin-right: -12px;
+    padding-left: calc(12px + 16px);
+    padding-right: calc(12px + 16px);
   }
 
   .topbar,
