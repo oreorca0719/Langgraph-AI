@@ -253,9 +253,34 @@ async def chat_endpoint(request: Request):
     }
 
     # ── v2 그래프 실행 ────────────────────────────────────────
+    # LangGraph 체크포인터(thread_id=user_id)는 이전 턴의 state 전체를
+    # DynamoDB 에 영속화한다. 출력·처리 관련 필드는 매 턴 새로 작성되어야
+    # 하므로 invoke 시점에 명시적으로 빈 값으로 리셋. (잔존값 누출로 인한
+    # 오답·잘못된 라우팅 방지)
+    #
+    # 리셋 제외 항목:
+    #   - decision_path : Annotated[..., add] → reducer 가 append 만 수행하므로
+    #                     [] 입력은 no-op. 누적 허용 (route_after_qa_lookup 은
+    #                     [-1] 만 검사하므로 정상 동작).
+    #   - messages      : add_messages reducer → 의도적 누적 (chat 히스토리)
+    #   - original_input: router_node 가 매 턴 input_data 로 초기화
+    #   - file_context*: 파일 업로드 세션 상태 — 유지
     inputs = {
-        "trace_id":   trace_id,
-        "input_data": user_input,
+        "trace_id":             trace_id,
+        "input_data":           user_input,
+        "input_embedding":      None,
+        "answer":               "",
+        "citations":            [],
+        "verification":         None,
+        "routing_decision":     "",
+        "question_type":        "reasoning",
+        "security_blocked":     False,
+        "security_reason":      "",
+        "sub_questions":        [],
+        "retrieved_docs":       [],
+        "llm_call_count":       0,
+        "retrieval_iterations": 0,
+        "replan_iterations":    0,
     }
     result = graph_app.invoke(inputs, config=config)
 

@@ -72,7 +72,13 @@ def qa_lookup_node(state: GraphState) -> dict:
 
 
 def route_after_qa_lookup(state: GraphState) -> str:
-    """bypass hit이면 end (이미 answer 작성됨), 그 외엔 retrieve로 진행."""
-    if state.answer and state.citations:
+    """이번 턴의 qa_lookup 결과로만 분기.
+
+    decision_path 의 마지막 항목이 'qa_lookup:bypass(...)' 인 경우만 end.
+    state.answer / state.citations 를 직접 검사하면 LangGraph 체크포인터가
+    이전 턴 값을 그대로 로드한 상태이므로 신구 턴 구분 불가 → bug.
+    """
+    last_path = state.decision_path[-1] if state.decision_path else ""
+    if last_path.startswith("qa_lookup:bypass"):
         return "end"
     return "retrieve"
