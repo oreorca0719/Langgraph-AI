@@ -35,12 +35,21 @@
         <div class="bot-avatar"></div>
         <div class="content">
           <p class="message-title">Assistant</p>
-          안녕하세요.<br><br>저는 임직원의 업무 효율을 높이기 위해 도입된 사내 AI 어시스턴트입니다.<br><br>어떤 도움이 필요하신가요?
+          <p style="margin: 0 0 14px;">안녕하세요!<br>프로엔솔루션 사내 정보 검색을 도와드리는 Kaiper AI 입니다.</p>
+
+          <p style="margin: 0 0 14px;">사내 문서·정책·매뉴얼·회의록 등에서 질문에 답이 될 정보를<br>출처와 함께 찾아드립니다.</p>
+
+          <p style="margin: 0 0 14px; padding: 12px 14px; background: var(--gray-100); border-radius: 8px; font-size: 13px;">
+            본 시스템은 사내 지식 정보 관리 시스템입니다.<br>
+            시스템의 의도와 무관한 요청은 정확도를 보장하지 않습니다.
+          </p>
+
+          <p style="margin: 0; color: var(--text-2); font-size: 13px;">답변에 표시된 출처는 반드시 확인해 주세요.</p>
 
           <div class="task-options" style="margin-top: 18px;">
-            <button type="button" class="task-option-btn" onclick="document.getElementById('user-input').value='지난 회의 결과를 한 줄로 요약해줘'; document.getElementById('user-input').focus();">📋 회의 결과 요약</button>
+            <button type="button" class="task-option-btn" onclick="document.getElementById('user-input').value='지난 회의 결과를 한 줄로 요약해줘'; document.getElementById('user-input').focus();">📋 회의록 요약</button>
             <button type="button" class="task-option-btn" onclick="document.getElementById('user-input').value='사내 보안 정책 알려줘'; document.getElementById('user-input').focus();">🔍 사내 정책 검색</button>
-            <button type="button" class="task-option-btn" onclick="document.getElementById('user-input').value='RFP 초안을 작성해줘'; document.getElementById('user-input').focus();">📝 RFP 초안</button>
+            <button type="button" class="task-option-btn" onclick="document.getElementById('user-input').value='강사 역량 요건 알려줘'; document.getElementById('user-input').focus();">📚 매뉴얼·자료 찾기</button>
             <button type="button" class="task-option-btn" onclick="document.getElementById('attach-btn').click();">📎 파일 분석</button>
           </div>
         </div>
