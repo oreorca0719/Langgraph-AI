@@ -1,135 +1,289 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>사용자 관리 | Kaiper</title>
+  <title>사용자 관리 | Kaiper AI</title>
+  <link rel="stylesheet" as="style" crossorigin
+        href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link href="https://api.fontshare.com/v2/css?f[]=general-sans@500,600,700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css" />
   <style>
-    /* ✅ 액션 버튼 — 그리드로 고정 위치 + td 내부 가운데 정렬 */
-    .actions-cell {
-      display: grid !important;
-      grid-template-columns: 90px 100px 70px;
-      gap: 6px;
-      white-space: nowrap;
-      justify-content: center;
+    .admin-shell { max-width: 1280px; margin: 0 auto; padding: 0 24px 80px; }
+
+    /* Header */
+    .users-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-bottom: 28px;
+      padding-top: 60px;
     }
-    .actions-cell .col-approve { grid-column: 1; }
-    .actions-cell .col-admin { grid-column: 2; }
-    .actions-cell .col-delete { grid-column: 3; }
-    .actions-cell .inline-form { display: contents; }
-    .actions-cell button { width: 100%; padding: 6px 10px; font-size: 12px; }
-    /* 읽기전용 알림 — 라이트테마용 앰버 */
+    .breadcrumb {
+      color: var(--text-2);
+      text-decoration: none;
+      font-size: 13px;
+      margin-bottom: 8px;
+      display: inline-block;
+    }
+    .breadcrumb:hover { color: var(--text-1); }
+
+    /* Filter strip */
+    .filter-strip {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border);
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .filter-strip .search-input {
+      width: 280px;
+      padding: 8px 12px;
+      font-size: 13px;
+    }
+
+    /* Table — 그리드 기반 */
+    .users-table {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .users-thead {
+      display: grid;
+      grid-template-columns: 2fr 1.2fr 1.5fr 100px 100px 240px;
+      padding: 12px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--gray-100);
+    }
+    .users-row {
+      display: grid;
+      grid-template-columns: 2fr 1.2fr 1.5fr 100px 100px 240px;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      align-items: center;
+      transition: background .15s;
+    }
+    .users-row:last-child { border-bottom: none; }
+    .users-row:hover { background: rgba(99,102,241,0.025); }
+    .users-row.is-pending { background: rgba(245,158,11,0.04); }
+
+    .col-email { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+    .col-center { text-align: center; }
+    .col-actions {
+      display: flex;
+      gap: 6px;
+      justify-content: center;
+      white-space: nowrap;
+    }
+    .col-actions .inline-form { display: inline-flex; }
+    .col-actions button {
+      padding: 6px 10px;
+      font-size: 12px;
+      width: 100%;
+      min-width: 60px;
+    }
+
+    .avatar-sm {
+      width: 28px; height: 28px;
+      border-radius: 9999px;
+      background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+      color: #fff;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 600;
+      flex: 0 0 auto;
+    }
+    .avatar-sm.admin { background: linear-gradient(135deg, var(--secondary), var(--secondary-hover)); }
+    .avatar-sm.warn { background: linear-gradient(135deg, var(--warning), #d97706); }
+
+    .dept-input {
+      width: 100%;
+      padding: 6px 10px;
+      font-size: 13px;
+    }
+
     .readonly-alert {
-      margin-bottom: 16px; padding: 10px 14px;
-      background: rgba(217, 119, 6, 0.08);
-      border: 1px solid rgba(217, 119, 6, 0.3);
-      border-radius: 8px; font-size: 13px;
+      margin-bottom: 20px;
+      padding: 12px 16px;
+      background: var(--warning-tint);
+      border: 1px solid rgba(245,158,11,0.3);
+      border-radius: 8px;
+      font-size: 13px;
       color: #b45309;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    @media (max-width: 1100px) {
+      .users-thead, .users-row {
+        grid-template-columns: 2fr 1fr 1.2fr 90px 90px 220px;
+      }
+    }
+    @media (max-width: 768px) {
+      .users-thead, .users-row {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
     }
   </style>
 </head>
 <body class="page-admin">
-  <main class="panel admin-panel">
-    <header class="admin-header">
+  <!-- Top nav -->
+  <nav class="topbar">
+    <a href="/admin" class="brand">
+      <span class="brand-dot admin"></span>
+      <span>Kaiper AI · Admin</span>
+    </a>
+    <div class="topbar-actions">
+      <a href="/admin" class="admin-btn">Admin 홈</a>
+      <a href="/" class="admin-btn">메인</a>
+      <a href="/logout" class="logout-btn">로그아웃</a>
+    </div>
+  </nav>
+
+  <main class="admin-shell">
+    <!-- Header -->
+    <div class="users-header">
       <div>
-        <p class="eyebrow">Kaiper Admin</p>
-        <h1 class="panel-title">사용자 관리</h1>
-        <p class="panel-subtitle">관리자: <strong>{{ user.email }}</strong></p>
+        <a href="/admin" class="breadcrumb">← Admin</a>
+        <h1 class="display-3" style="margin-bottom: 6px;">사용자</h1>
+        <p class="text-small">관리자: <strong style="color: var(--text-1); font-weight: 500;">{{ user.email }}</strong></p>
       </div>
-      <div class="topbar-actions">
-        <a href="/admin" class="admin-btn">Admin 홈</a>
-        <a href="/" class="admin-btn">메인으로</a>
-        <a href="/logout" class="logout-btn">로그아웃</a>
-      </div>
-    </header>
+    </div>
 
     {% if read_only %}
     <div class="readonly-alert">
-      ⚠ 읽기 전용 모드 — 데이터 조회만 가능합니다.
+      <span class="badge-dot" style="color: var(--warning);"></span>
+      <span><strong>읽기 전용 모드</strong> — 데이터 조회만 가능합니다.</span>
     </div>
     {% endif %}
 
-    <div class="table-wrap">
-      <table class="admin-table">
-        <thead>
-          <tr>
-            <th>이메일</th>
-            <th>이름</th>
-            <th>소속</th>
-            <th>승인</th>
-            <th>관리자</th>
-            <th>액션</th>
-          </tr>
-        </thead>
-        <tbody>
-          {# ✅ 정렬: 관리자 최상단 → 그 외 사용자는 이름 내림차순 #}
-          {% for u in (users|sort(attribute='name', reverse=true)|sort(attribute='is_admin', reverse=true)) %}
-          <tr>
-            <td>{{ u.email }}</td>
-            <td>{{ u.name }}</td>
-            <td>
-              {% if not read_only %}
-              <form method="post" action="/admin/users/set-department" class="inline-form">
-                <input type="hidden" name="email" value="{{ u.email }}" />
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <input type="text" name="department" value="{{ u.department or '' }}" placeholder="소속 입력" style="width:100px;" />
-                <button type="submit">저장</button>
-              </form>
-              {% else %}
-              <span style="color:var(--text-dim);font-size:12px;">{{ u.department or '-' }}</span>
-              {% endif %}
-            </td>
-            <td>{{ u.approved }}</td>
-            <td>{{ u.is_admin }}</td>
-            <td class="actions-cell">
-              {% if not read_only %}
-              {# 1열: 승인 / 승인해제 #}
-              {% if not u.approved %}
-              <form method="post" action="/admin/users/approve" class="inline-form col-approve">
-                <input type="hidden" name="email" value="{{ u.email }}" />
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <button type="submit" class="col-approve">승인</button>
-              </form>
-              {% else %}
-              <form method="post" action="/admin/users/reject" class="inline-form col-approve">
-                <input type="hidden" name="email" value="{{ u.email }}" />
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <button type="submit" class="col-approve">승인해제</button>
-              </form>
-              {% endif %}
+    <!-- Filter strip -->
+    {% set total_users = users|length %}
+    {% set approved_count = users|selectattr('approved')|list|length %}
+    {% set pending_count = total_users - approved_count %}
+    {% set admin_count = users|selectattr('is_admin')|list|length %}
 
-              {# 2열: 관리자부여 / 관리자해제 #}
-              {% if u.is_admin %}
-              <form method="post" action="/admin/users/toggle-admin" class="inline-form col-admin">
-                <input type="hidden" name="email" value="{{ u.email }}" />
-                <input type="hidden" name="make_admin" value="0" />
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <button type="submit" class="col-admin">관리자해제</button>
-              </form>
-              {% else %}
-              <form method="post" action="/admin/users/toggle-admin" class="inline-form col-admin">
-                <input type="hidden" name="email" value="{{ u.email }}" />
-                <input type="hidden" name="make_admin" value="1" />
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <button type="submit" class="col-admin">관리자부여</button>
-              </form>
-              {% endif %}
+    <div class="filter-strip">
+      <span class="chip active">전체 {{ total_users }}</span>
+      <span class="chip">승인 {{ approved_count }}</span>
+      <span class="chip">대기 {{ pending_count }}</span>
+      <span class="chip">관리자 {{ admin_count }}</span>
+    </div>
 
-              {# 3열: 삭제 #}
-              <form method="post" action="/admin/users/delete" class="inline-form col-delete" onsubmit="return confirm('정말 삭제하시겠습니까? ({{ u.email }})');">
-                <input type="hidden" name="email" value="{{ u.email }}" />
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-                <button type="submit" class="danger-btn col-delete">삭제</button>
-              </form>
-              {% else %}
-              <span style="color:var(--text-dim);font-size:12px;">—</span>
-              {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+    <!-- Table -->
+    <div class="users-table">
+      <div class="users-thead">
+        <div class="overline">이메일</div>
+        <div class="overline">이름</div>
+        <div class="overline">소속</div>
+        <div class="overline col-center">상태</div>
+        <div class="overline col-center">권한</div>
+        <div class="overline col-center">작업</div>
+      </div>
+
+      {# 정렬: 관리자 최상단 → 그 외 사용자는 이름 내림차순 #}
+      {% for u in (users|sort(attribute='name', reverse=true)|sort(attribute='is_admin', reverse=true)) %}
+      <div class="users-row {% if not u.approved %}is-pending{% endif %}">
+        <!-- email -->
+        <div class="col-email">
+          {% if u.is_admin %}
+            <span class="avatar-sm admin">{{ (u.name or 'A')[:1] }}</span>
+          {% elif not u.approved %}
+            <span class="avatar-sm warn">{{ (u.name or 'U')[:1] }}</span>
+          {% else %}
+            <span class="avatar-sm">{{ (u.name or 'U')[:1] }}</span>
+          {% endif %}
+          <span>{{ u.email }}</span>
+        </div>
+
+        <!-- name -->
+        <div style="font-size: 14px; font-weight: 500;">{{ u.name }}</div>
+
+        <!-- department -->
+        <div>
+          {% if not read_only %}
+          <form method="post" action="/admin/users/set-department" class="inline-form" style="display:flex; gap:6px;">
+            <input type="hidden" name="email" value="{{ u.email }}" />
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <input type="text" name="department" class="dept-input" value="{{ u.department or '' }}" placeholder="소속 입력" />
+            <button type="submit" class="admin-btn btn-sm">저장</button>
+          </form>
+          {% else %}
+          <span style="color: var(--text-2); font-size: 13px;">{{ u.department or '-' }}</span>
+          {% endif %}
+        </div>
+
+        <!-- approved status -->
+        <div class="col-center">
+          {% if u.approved %}
+            <span class="chip success">승인</span>
+          {% else %}
+            <span class="chip warning">대기</span>
+          {% endif %}
+        </div>
+
+        <!-- admin role -->
+        <div class="col-center">
+          {% if u.is_admin %}
+            <span class="chip admin">관리자</span>
+          {% else %}
+            <span class="chip outline">일반</span>
+          {% endif %}
+        </div>
+
+        <!-- actions -->
+        <div class="col-actions">
+          {% if not read_only %}
+            {# 승인 / 승인해제 #}
+            {% if not u.approved %}
+            <form method="post" action="/admin/users/approve" class="inline-form">
+              <input type="hidden" name="email" value="{{ u.email }}" />
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button type="submit" class="primary-btn btn-sm">승인</button>
+            </form>
+            {% else %}
+            <form method="post" action="/admin/users/reject" class="inline-form">
+              <input type="hidden" name="email" value="{{ u.email }}" />
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button type="submit" class="admin-btn btn-sm">승인해제</button>
+            </form>
+            {% endif %}
+
+            {# 관리자부여 / 관리자해제 #}
+            {% if u.is_admin %}
+            <form method="post" action="/admin/users/toggle-admin" class="inline-form">
+              <input type="hidden" name="email" value="{{ u.email }}" />
+              <input type="hidden" name="make_admin" value="0" />
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button type="submit" class="admin-btn btn-sm">해제</button>
+            </form>
+            {% else %}
+            <form method="post" action="/admin/users/toggle-admin" class="inline-form">
+              <input type="hidden" name="email" value="{{ u.email }}" />
+              <input type="hidden" name="make_admin" value="1" />
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button type="submit" class="admin-btn btn-sm">관리자</button>
+            </form>
+            {% endif %}
+
+            {# 삭제 #}
+            <form method="post" action="/admin/users/delete" class="inline-form" onsubmit="return confirm('정말 삭제하시겠습니까? ({{ u.email }})');">
+              <input type="hidden" name="email" value="{{ u.email }}" />
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button type="submit" class="danger-btn btn-sm">삭제</button>
+            </form>
+          {% else %}
+            <span style="color: var(--text-2); font-size: 12px;">—</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
     </div>
   </main>
 </body>

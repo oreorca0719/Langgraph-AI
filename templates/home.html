@@ -3,140 +3,125 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>홈 | Kaiper</title>
+  <title>홈 | Kaiper AI</title>
+  <link rel="stylesheet" as="style" crossorigin
+        href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link href="https://api.fontshare.com/v2/css?f[]=general-sans@500,600,700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css" />
   <style>
-    .home-shell {
-      max-width: 800px;
-      margin: 0 auto;
-      padding: 48px 20px;
+    .home-shell { max-width: 1280px; margin: 0 auto; padding: 0 24px 80px; }
+    .home-hero { padding-top: 60px; padding-bottom: 32px; }
+    .user-meta-row {
+      display: flex; flex-wrap: wrap; gap: 8px 24px;
+      margin-top: 24px;
+      font-size: 14px; color: var(--text-2);
     }
-
-    .home-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 14px;
-      margin-bottom: 36px;
-    }
-
-    .user-card {
-      background: var(--surface-strong);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 24px 28px;
-      margin-bottom: 32px;
-    }
-
-    .user-greeting {
-      font-size: 22px;
-      font-weight: 700;
-      margin-bottom: 12px;
-    }
-
-    .user-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px 24px;
-      font-size: 13px;
-      color: var(--text-dim);
-    }
-
-    .user-meta span strong {
-      color: var(--text);
-    }
-
-    .section-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text-dim);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      margin-bottom: 14px;
-    }
-
-    .menu-grid {
+    .user-meta-row span strong { color: var(--text-1); font-weight: 500; }
+    .featured-card {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px;
-      margin-bottom: 32px;
+      grid-template-columns: 1.2fr 1fr;
+      padding: 0;
+      min-height: 280px;
+      text-decoration: none;
+      color: inherit;
     }
-
-    @media (max-width: 560px) {
-      .menu-grid { grid-template-columns: 1fr; }
-    }
-
-    .menu-card {
+    .featured-content {
+      padding: 40px 44px;
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      padding: 22px 24px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: var(--surface-strong);
-      text-decoration: none;
-      color: var(--text);
-      transition: border-color 0.2s, transform 0.2s, background 0.2s;
+      justify-content: space-between;
     }
-
-    .menu-card:hover {
-      border-color: rgba(90, 156, 164, 0.5);
-      background: white;
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0, 26, 77, 0.08);
+    .featured-icon-area {
+      background-color: var(--bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
-
-    .menu-icon { font-size: 26px; line-height: 1; }
-    .menu-label { font-size: 15px; font-weight: 700; margin-top: 4px; }
-    .menu-desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
-
-    /* 서비스 섹션 — 배경 구분 */
-    .service-section {
-      background: linear-gradient(135deg, rgba(90, 156, 164, 0.08) 0%, rgba(0, 26, 77, 0.04) 100%);
-      border: 1px solid rgba(90, 156, 164, 0.15);
-      border-radius: 18px;
-      padding: 24px;
-      margin-bottom: 32px;
+    .featured-icon-shape {
+      width: 120px; height: 120px;
+      border-radius: 9999px;
+      background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 48px; color: white;
     }
-    .service-section .section-title { margin-top: 0; }
+    .feature-tags {
+      display: flex; gap: 8px; flex-wrap: wrap;
+    }
+    @media (max-width: 768px) {
+      .featured-card { grid-template-columns: 1fr; }
+      .featured-icon-area { min-height: 200px; }
+    }
   </style>
 </head>
 <body>
-  <div class="home-shell">
-    <div class="home-header">
-      <div>
-        <p class="eyebrow">Kaiper</p>
-        <h1 class="panel-title">홈</h1>
-      </div>
-      <div class="topbar-actions">
-        {% if user and user.is_admin %}
-          <a href="/admin" class="admin-btn">관리자 페이지</a>
-        {% endif %}
-        <a href="/logout" class="logout-btn">로그아웃</a>
-      </div>
+  <!-- Top nav -->
+  <nav class="topbar">
+    <a href="/" class="brand">
+      <span class="brand-dot"></span>
+      <span>Kaiper AI</span>
+    </a>
+    <div class="topbar-actions">
+      {% if user and user.is_admin %}
+        <a href="/admin" class="admin-btn">관리자</a>
+      {% endif %}
+      <a href="/logout" class="logout-btn">로그아웃</a>
     </div>
+  </nav>
 
-    <!-- 사용자 정보 카드 -->
-    <div class="user-card">
-      <div class="user-greeting">{{ user.name }}님, 안녕하세요.</div>
-      <div class="user-meta">
+  <main class="home-shell">
+    <!-- Greeting Hero -->
+    <section class="home-hero">
+      <p class="overline" style="margin-bottom: 18px;">Welcome</p>
+      <h1 class="display-2" style="margin-bottom: 16px;">
+        안녕하세요, {{ user.name }} 님.
+      </h1>
+      <p style="font-size: 18px; color: var(--text-2); max-width: 600px;">
+        오늘은 어떤 업무를 도와드릴까요?
+      </p>
+
+      <div class="user-meta-row">
         <span>이메일 <strong>{{ user.email }}</strong></span>
         <span>소속 <strong>{{ user.department or '미지정' }}</strong></span>
         <span>마지막 로그인 <strong>{{ last_login_str }}</strong></span>
       </div>
-    </div>
+    </section>
 
-    <!-- 서비스 바로가기 -->
-    <div class="service-section">
-      <p class="section-title">서비스</p>
-      <a href="/chat" class="menu-card" style="display:flex; flex-direction:row; align-items:center; gap:20px; padding:28px 32px; margin-bottom:0;">
-        <div class="menu-icon" style="font-size:36px;">🤖</div>
-        <div>
-          <div class="menu-label" style="font-size:18px;">사무 보조 AI 어시스턴트</div>
-          <div class="menu-desc">질문, 문서 검색, 이메일·RFP 초안 작성, 파일 분석을 도와드립니다</div>
+    <!-- Featured Service -->
+    <section style="padding-top: 40px;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 20px;">
+        <h2 class="display-3" style="font-size: 28px;">서비스</h2>
+        <span class="text-small">사내 임직원 전용</span>
+      </div>
+
+      <a href="/chat" class="card card-hover featured-card">
+        <div class="featured-content">
+          <div>
+            <span class="chip" style="margin-bottom: 20px;">
+              <span class="badge-dot" style="color: var(--primary);"></span>
+              Live
+            </span>
+            <h3 class="h-subhead" style="font-size: 26px; margin-bottom: 14px; line-height: 1.25;">
+              사무 보조 AI 어시스턴트
+            </h3>
+            <p style="color: var(--text-2); font-size: 15px; line-height: 1.65;">
+              질문, 사내 문서 검색, 이메일·RFP 초안 작성, 파일 분석을<br>
+              한곳에서. 답변마다 출처를 함께 제공합니다.
+            </p>
+          </div>
+          <div class="feature-tags">
+            <span class="chip outline">RAG 검색</span>
+            <span class="chip outline">파일 분석</span>
+            <span class="chip outline">RFP 초안</span>
+            <span class="chip outline">출처 검증</span>
+          </div>
+        </div>
+        <div class="featured-icon-area dot-grid">
+          <div class="featured-icon-shape">◇</div>
         </div>
       </a>
-    </div>
-  </div>
+    </section>
+  </main>
 </body>
 </html>

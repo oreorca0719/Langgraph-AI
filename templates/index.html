@@ -1,35 +1,48 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Assistant | Kaiper</title>
+  <title>Assistant | Kaiper AI</title>
+  <link rel="stylesheet" as="style" crossorigin
+        href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+  <link href="https://api.fontshare.com/v2/css?f[]=general-sans@500,600,700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css" />
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
-  <div class="app-shell">
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">Kaiper</p>
-        <h1 class="title">Assistant</h1>
-      </div>
-      <div class="topbar-actions">
-        {% if user and user.is_admin %}
-          <a href="/admin" class="admin-btn">관리자 페이지</a>
-        {% endif %}
-        <a href="/" class="admin-btn">홈</a>
-        <button id="new-chat-btn" class="admin-btn">새 대화</button>
-        <a href="/logout" class="logout-btn">로그아웃</a>
-      </div>
-    </header>
+  <!-- Top nav with backdrop blur -->
+  <nav class="topbar">
+    <a href="/" class="brand">
+      <span class="brand-dot"></span>
+      <span>Kaiper AI</span>
+    </a>
+    <div class="topbar-actions">
+      {% if user and user.is_admin %}
+        <a href="/admin" class="admin-btn">관리자</a>
+      {% endif %}
+      <a href="/" class="admin-btn">홈</a>
+      <button id="new-chat-btn" class="admin-btn">+ 새 대화</button>
+      <a href="/logout" class="logout-btn">로그아웃</a>
+    </div>
+  </nav>
 
+  <div class="app-shell">
     <main id="chat-box">
       <div class="message bot">
         <div class="bot-avatar"></div>
         <div class="content">
           <p class="message-title">Assistant</p>
           안녕하세요.<br><br>저는 임직원의 업무 효율을 높이기 위해 도입된 사내 AI 어시스턴트입니다.<br><br>어떤 도움이 필요하신가요?
+
+          <div class="task-options" style="margin-top: 18px;">
+            <button type="button" class="task-option-btn" onclick="document.getElementById('user-input').value='지난 회의 결과를 한 줄로 요약해줘'; document.getElementById('user-input').focus();">📋 회의 결과 요약</button>
+            <button type="button" class="task-option-btn" onclick="document.getElementById('user-input').value='사내 보안 정책 알려줘'; document.getElementById('user-input').focus();">🔍 사내 정책 검색</button>
+            <button type="button" class="task-option-btn" onclick="document.getElementById('user-input').value='RFP 초안을 작성해줘'; document.getElementById('user-input').focus();">📝 RFP 초안</button>
+            <button type="button" class="task-option-btn" onclick="document.getElementById('attach-btn').click();">📎 파일 분석</button>
+          </div>
         </div>
       </div>
     </main>
@@ -44,9 +57,11 @@
         </svg>
       </button>
       <span id="file-badge" style="display:none"></span>
-      <input type="text" id="user-input" placeholder="질문을 입력해 주세요" />
-      <button id="send-btn">전송</button>
+      <input type="text" id="user-input" placeholder="질문을 입력하세요..." />
+      <span class="text-mono" style="font-size: 11px; color: var(--text-2);">⌘↵</span>
+      <button id="send-btn" class="primary-btn">전송</button>
     </div>
+    <p class="composer-hint">AI 답변은 출처와 함께 제공되며, 항상 검증 후 사용해 주세요.</p>
   </div>
 
   <script src="/static/js/chat.js?v=2"></script>
