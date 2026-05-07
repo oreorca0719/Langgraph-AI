@@ -180,7 +180,10 @@ def retrieve_node(state: GraphState) -> dict:
     pool: dict[str, Document] = {}
     for q in queries:
         try:
-            for d in retriever.retrieve(q, top_k=5):
+            # 각 query 당 후보 chunk 수 — phrasing 격차로 정답 chunk 가
+            # 5위 밖으로 밀리는 결함 해소 위해 top_k 5 → 20 확장.
+            # reranker 가 받는 후보 풀 크기 격증 → 정확도 향상.
+            for d in retriever.retrieve(q, top_k=20):
                 key = d.content
                 if key in pool:
                     pool[key] = Document(
@@ -194,7 +197,9 @@ def retrieve_node(state: GraphState) -> dict:
         except Exception as e:
             print(f"[RETRIEVE] '{q[:40]}' failed (non-fatal): {e}")
 
-    docs = sorted(pool.values(), key=lambda d: d.score, reverse=True)[:5]
+    # 통합 풀 상위 20개 유지 (5 → 20). Generator 컨텍스트 폭주 방지는
+    # downstream 의 grader (reranker threshold) 가 담당.
+    docs = sorted(pool.values(), key=lambda d: d.score, reverse=True)[:20]
 
     # Phase G: 같은 page의 다른 chunks 함께 fetch (표·본문 함께 보기)
     if hasattr(retriever, "expand_with_same_page"):
