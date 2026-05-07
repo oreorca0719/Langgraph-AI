@@ -270,6 +270,15 @@ def admin_reingest(request: Request, force: bool = False):
                     )
 
         auto_ingest_if_enabled()
+
+        # rewrite_node 의 doc 카탈로그 캐시 무효화 — 새 doc_summary/key_terms 반영
+        try:
+            from app.graph_v2.subgraphs.retrieve import _invalidate_doc_catalog
+            _invalidate_doc_catalog()
+            print("[ADMIN] doc 카탈로그 캐시 무효화 완료")
+        except Exception as e:
+            print(f"[ADMIN] doc 카탈로그 캐시 무효화 실패 (non-fatal): {e}")
+
         msg = "전체 강제 재인제스트가 완료되었습니다." if force else "재인제스트가 완료되었습니다. 변경된 파일만 재처리되었으며, 변경 없는 파일은 skip되었습니다."
         return JSONResponse({"ok": True, "message": msg, "force": force})
 

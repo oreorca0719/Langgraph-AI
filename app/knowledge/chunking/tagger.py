@@ -17,6 +17,7 @@ from pathlib import Path
 
 from app.knowledge.chunking.page_unit import Chunk, PageUnit
 from app.knowledge.chunking.doc_topic_classifier import classify_doc_topic
+from app.knowledge.chunking.doc_summary_classifier import classify_doc_summary
 
 
 # ────────────────────────────────────────────────────────────
@@ -83,9 +84,16 @@ def tag_chunks(
 
     # 1. doc_topic 1회 (전체 문서 텍스트 합쳐서)
     doc_topic = "general"
+    doc_summary = ""
+    key_terms_str = ""
     if enable_llm_doc_topic:
         full_text = "\n\n".join(u.text for u in units if u.text)[:5000]
         doc_topic = classify_doc_topic(full_text)
+
+        # doc_summary, key_terms 분류 (LLM 1회 추가) — rewrite_node 의 doc 카탈로그 원천
+        s = classify_doc_summary(full_text)
+        doc_summary = s["summary"]
+        key_terms_str = ",".join(s["key_terms"])
 
     # 2. unit별 chunk 생성
     chunks: list[Chunk] = []
@@ -120,6 +128,8 @@ def tag_chunks(
             "entities": " ".join(entities),
             # LLM metadata
             "doc_topic": doc_topic,
+            "doc_summary": doc_summary,    # 신규 — doc 카탈로그용
+            "key_terms": key_terms_str,    # 신규 — comma-separated, ChromaDB 호환
             # 기존 v1 호환 필드
             "title": u.title or doc_id,
             "display_source": doc_id,

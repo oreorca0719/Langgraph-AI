@@ -11,6 +11,7 @@ Phase C 학습 반영:
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from typing import Optional
 
 from langchain_core.messages import HumanMessage
@@ -22,6 +23,56 @@ from app.graph_v2.retrievers.base import Document, RetrieverRegistry
 from app.graph_v2.retrievers.chroma_hybrid import ChromaHybridRetriever
 from app.graph_v2.nodes.grader import grader_node, route_after_grade
 from app.knowledge.chunking.tagger import extract_entities
+
+
+# ────────────────────────────────────────────────────────────
+# Doc 카탈로그 — rewrite_node 가 사내 코퍼스 어휘를 알 수 있게 함
+# 모든 chunks 메타에 동일하게 상속된 doc_summary / key_terms 를
+# unique doc 단위로 추출하여 prompt 주입 형식으로 포맷팅.
+# ────────────────────────────────────────────────────────────
+
+@lru_cache(maxsize=1)
+def _build_doc_catalog() -> str:
+    """ChromaDB 의 모든 chunks 메타에서 unique doc 단위 카탈로그 빌드.
+
+    재인제스트 시 _invalidate_doc_catalog() 로 캐시 무효화 필수.
+    """
+    try:
+        retriever = ChromaHybridRetriever()
+        chroma = retriever._get_chroma()
+        res = chroma._collection.get(include=["metadatas"])
+        metas = res.get("metadatas") or []
+
+        seen: set[str] = set()
+        catalog_lines: list[str] = []
+        for m in metas:
+            doc_id = (m or {}).get("doc_id")
+            if not doc_id or doc_id in seen:
+                continue
+            seen.add(doc_id)
+
+            summary = ((m or {}).get("doc_summary") or "").strip()
+            key_terms = ((m or {}).get("key_terms") or "").strip()
+            if not summary:
+                continue   # 메타 미구축 doc 스킵 (graceful)
+
+            catalog_lines.append(
+                f"- [{doc_id}]\n"
+                f"  요약: {summary}\n"
+                f"  관련 어휘: {key_terms}"
+            )
+
+        if not catalog_lines:
+            return "(카탈로그 미구축 — 재인제스트 필요)"
+        return "\n".join(catalog_lines)
+    except Exception as e:
+        print(f"[DOC_CATALOG] build failed (non-fatal): {e}")
+        return "(카탈로그 빌드 실패)"
+
+
+def _invalidate_doc_catalog() -> None:
+    """재인제스트 직후 호출. 캐시 무효화."""
+    _build_doc_catalog.cache_clear()
 
 
 # ────────────────────────────────────────────────────────────
@@ -181,7 +232,8 @@ def retrieve_node(state: GraphState) -> dict:
 # anchor: state.original_input (router에서 1회 초기화, 이후 불변)
 # rewrite 결과: state.input_data 만 갱신, original_input은 보존
 
-_PROMPT_NEGATIVE_FEEDBACK = """당신은 사내 RAG 시스템의 query rewriter입니다. 직전 검색이 정답을 못 찾았으니 다른 방향으로 재작성합니다.
+_PROMPT_DOC_AWARE = """당신은 사내 RAG 시스템의 query rewriter 입니다.
+직전 검색이 정답을 못 찾았으니 사내 문서 카탈로그를 참고하여 재작성합니다.
 
 [원본 사용자 질문]
 {original}
@@ -189,35 +241,21 @@ _PROMPT_NEGATIVE_FEEDBACK = """당신은 사내 RAG 시스템의 query rewriter�
 [직전 시도 쿼리]
 {current}
 
-[직전 retrieve 결과 요약 — grader가 모두 무관 판정 ({iter}회차)]
+[직전 retrieve 결과 — grader 가 모두 무관 판정]
 - 회피해야 할 키워드: {extraneous}
-- 가져온 문서 주제: {topics}
+
+[사내 문서 카탈로그]
+{catalog}
 
 【재작성 원칙】
-1. 원본 질문의 핵심 entity ({query_entities}) 는 그대로 유지
-2. 위 "회피 키워드" 방향으로 가는 표현은 사용 금지
-3. 같은 의도를 다른 어휘 조합으로 — 동의어·구체화·상위어
-4. 군더더기 제거, 검색에 효과적인 핵심어만
+1. 카탈로그에서 사용자 의도와 가장 가까운 1~2개 문서를 식별
+2. 그 문서의 "관련 어휘" 중 사용자 질의에 없던 것을 query 에 반영
+   (예: 사용자 "재택근무" → 카탈로그에 "원격 근무" 발견 → query 에 추가)
+3. 원본 질문의 핵심 entity 는 유지
+4. 회피 키워드 방향으로 가는 표현 사용 금지
+5. 군더더기 제거, 검색에 효과적인 핵심어만
 
-【출력】 재작성된 쿼리만 한 줄. 다른 텍스트 금지.
-"""
-
-_PROMPT_EMPTY = """직전 retrieve가 결과를 반환하지 못했습니다.
-- 너무 좁거나 구체적인 표현일 가능성
-- 동의어·상위어로 확장 필요
-
-[원본 사용자 질문]
-{original}
-
-[직전 시도 쿼리]
-{current}
-
-【재작성 원칙】
-1. 핵심 entity 유지
-2. 좁은 표현을 더 일반적인 키워드로 (예: "당사 슬로건 문구" → "슬로건")
-3. 군더더기 제거
-
-【출력】 재작성된 쿼리만 한 줄. 다른 텍스트 금지.
+【출력】 재작성된 query 만 한 줄. 다른 텍스트 금지.
 """
 
 
@@ -260,38 +298,32 @@ def _parse_rewrite_response(raw, original_input: str) -> str:
 
 
 def rewrite_node(state: GraphState) -> dict:
-    """Grader가 모두 irrelevant 판정 시 query 재작성.
+    """Grader 가 모두 irrelevant 판정 시 query 재작성.
 
-    Negative feedback:
-      - 직전 chunks의 entity union − query entity = extraneous (회피 대상)
-      - LLM에 "이 방향은 비껴갔으니 다른 표현으로" 명시
+    Doc-aware 방식:
+      - 사내 문서 카탈로그(doc_summary + key_terms)를 LLM 에 주입
+      - LLM 이 단순 일반 지식 추측이 아니라 실제 코퍼스 어휘를 참조하여 재작성
+      - LLM 이 코퍼스를 모르는 본질적 한계 보완
     """
     original = (state.original_input or state.input_data or "").strip()
     current = (state.input_data or "").strip()
     iter_next = state.retrieval_iterations + 1
     docs: list[Document] = state.retrieved_docs or []
 
-    # 입력 정보 수집
+    # 회피 키워드 추출 (직전 retrieve 가 빗나간 방향)
     query_entities = set(extract_entities(original))
     chunk_entities = _collect_chunk_entities(docs)
-    chunk_topics = _collect_chunk_topics(docs)
     extraneous = sorted(chunk_entities - {e.lower() for e in query_entities})
 
-    # Case 분기
-    use_neg_feedback = bool(docs) and bool(extraneous)
-    if use_neg_feedback:
-        prompt = _PROMPT_NEGATIVE_FEEDBACK.format(
-            original=original,
-            current=current,
-            iter=iter_next,
-            extraneous=", ".join(extraneous[:8]) or "(없음)",
-            topics=", ".join(sorted(chunk_topics)[:3]) or "(미분류)",
-            query_entities=", ".join(sorted(query_entities)[:5]) or "(추출 실패)",
-        )
-        case_label = "B"
-    else:
-        prompt = _PROMPT_EMPTY.format(original=original, current=current)
-        case_label = "A"
+    # 사내 문서 카탈로그 (메모리 캐시)
+    catalog = _build_doc_catalog()
+
+    prompt = _PROMPT_DOC_AWARE.format(
+        original=original,
+        current=current,
+        extraneous=", ".join(extraneous[:8]) or "(없음)",
+        catalog=catalog,
+    )
 
     # LLM 호출
     fallback = False
@@ -307,7 +339,7 @@ def rewrite_node(state: GraphState) -> dict:
         fallback = True
 
     label_suffix = (
-        f"rewrite:{case_label}({iter_next},avoid={len(extraneous)})"
+        f"rewrite:doc_aware({iter_next},avoid={len(extraneous)})"
         if not fallback else
         f"rewrite:fallback({iter_next})"
     )
@@ -326,8 +358,14 @@ def rewrite_node(state: GraphState) -> dict:
 # ────────────────────────────────────────────────────────────
 
 def _route_after_grade_with_limit(state: GraphState) -> str:
+    """rewrite 한도: 1회 (이전 3회 → 1회 축소).
+
+    근거: 1회 doc-aware rewrite 로 코퍼스 어휘 격차 케이스 대부분 해소.
+    1회로 못 찾는 케이스는 코퍼스에 없는 정보거나 query 가 너무 모호한 경우라
+    추가 rewrite 로도 회복 안 됨. 빠른 fail 이 사용자 UX 에 더 적합.
+    """
     decision = route_after_grade(state)
-    if decision == "rewrite" and state.retrieval_iterations < 3:
+    if decision == "rewrite" and state.retrieval_iterations < 1:
         return "rewrite"
     return "end"
 

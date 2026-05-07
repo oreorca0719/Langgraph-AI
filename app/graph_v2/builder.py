@@ -117,23 +117,13 @@ def _rejected_node(state: GraphState) -> dict:
     }
 
 
-# ─── Replan reset (router 회귀 전 카운터·상태 초기화) ─────
-
-def _replan_reset_node(state: GraphState) -> dict:
-    """Reflection fail 후 router 회귀 시 검색 결과·답변·검증 reset, replan_iterations++."""
-    return {
-        "retrieved_docs": [],
-        "citations": [],
-        "answer": "",
-        "verification": None,
-        "retrieval_iterations": 0,
-        "sub_questions": [],
-        "replan_iterations": state.replan_iterations + 1,
-        "decision_path": [f"replan:{state.replan_iterations + 1}"],
-    }
-
-
 # ─── Main graph builder ──────────────────────────────────
+# replan 메커니즘 폐기: rewrite 1회 + doc-aware 카탈로그로 대체.
+# 1차 시도가 빗나간 경우 사용자에게 빠른 fail 후 재질문을 유도하는 게
+# 자동 추측 재시도 (~120초 대기) 보다 사용자 UX 가 더 낫다는 결정.
+#
+# 단, reflection 자체는 유지 (verification 결과를 답변 메타로 활용 가능).
+# generator → reflection → END 경로는 항상 일관됨.
 
 def build_main_graph(checkpointer=None):
     g = StateGraph(GraphState)
@@ -148,7 +138,6 @@ def build_main_graph(checkpointer=None):
     g.add_node("qa_lookup", qa_lookup_node)
     g.add_node("retrieve", retrieve_sub)
     g.add_node("generate", generate_sub)
-    g.add_node("replan_reset", _replan_reset_node)
     g.add_node("no_retrieval_answer", _no_retrieval_answer_node)
     g.add_node("ai_guide", _ai_guide_node)
     g.add_node("file_chat", _file_chat_node)
@@ -177,18 +166,9 @@ def build_main_graph(checkpointer=None):
         {"end": END, "retrieve": "retrieve"},
     )
     g.add_edge("retrieve", "generate")
-
-    def _route_after_generate(state: GraphState) -> str:
-        if (state.verification and state.verification.needs_replan()
-                and state.replan_iterations < 1):
-            return "replan"
-        return "end"
-
-    g.add_conditional_edges(
-        "generate", _route_after_generate,
-        {"replan": "replan_reset", "end": END},
-    )
-    g.add_edge("replan_reset", "router")
+    # generate → END (replan 분기 폐기). reflection 결과는 verification 으로
+    # state 에 기록되며 답변 응답에 메타 정보로 포함 가능.
+    g.add_edge("generate", END)
     g.add_edge("no_retrieval_answer", END)
     g.add_edge("ai_guide", END)
     g.add_edge("file_chat", END)
