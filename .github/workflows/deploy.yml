@@ -50,18 +50,12 @@ jobs:
       - name: Render new ECS task definition
         id: render-task-def
         run: |
-          # 현재 등록된 task definition 의 최신 revision 을 받아 image 만 교체
-          aws ecs describe-task-definition \
-            --task-definition $TASK_DEFINITION_FAMILY \
-            --query 'taskDefinition' \
-            > task-def.json
-
-          # image, registers 만 갱신 (containerDefinitions[0].image)
+          # infrastructure/ecs-task-definition.json 을 source-of-truth 로 사용 (GitOps).
+          # 파일 안의 image 필드는 placeholder; build-image 단계에서 만든 신규
+          # image 로 교체 후 새 revision 등록.
           jq --arg IMG "${{ steps.build-image.outputs.image }}" '
             .containerDefinitions[0].image = $IMG
-            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
-                  .compatibilities, .registeredAt, .registeredBy)
-          ' task-def.json > new-task-def.json
+          ' infrastructure/ecs-task-definition.json > new-task-def.json
 
           NEW_TD=$(aws ecs register-task-definition \
             --cli-input-json file://new-task-def.json \
