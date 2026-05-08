@@ -2,8 +2,8 @@
   "family": "langgraph-rag",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
-  "cpu": "2048",
-  "memory": "4096",
+  "cpu": "1024",
+  "memory": "3072",
   "executionRoleArn": "arn:aws:iam::333347414948:role/langgraph-rag-task-execution",
   "taskRoleArn": "arn:aws:iam::333347414948:role/langgraph-rag-task",
   "runtimePlatform": {
