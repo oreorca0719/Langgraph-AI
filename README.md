@@ -33,6 +33,49 @@
 
 ---
 
+## 최근 운영 변경 (2026-05) — Phase I 이후
+
+### Backend / RAG
+- **doc-aware rewrite** (`5d314a8` 후속): 문서 ingest 시 LLM 으로 `doc_summary` + `key_terms` 메타 부착. rewrite 시 카탈로그 참조하여 코퍼스 어휘 격차 (예: "재택근무" ↔ "원격 근무") 해소.
+- **replan 폐기**: reflection fail 시 router 회귀하던 메커니즘 제거. 효용 5% 미만 vs 응답 시간 +60초 부담 → 빠른 fail 후 사용자 재질문이 더 합리적 (LLM 자체 재추측보다 정확).
+- **rewrite 한도 3 → 1**: 1회 doc-aware rewrite 로 어휘 격차 대부분 해소. 추가 시도 효용 미미.
+- **Retrieve top_k 5 → 20**: phrasing 격차 ("왜?" vs "근거?") 로 정답 chunk 가 6위 밖에 밀리는 결함 해소. Reranker threshold 0.3 으로 컨텍스트 폭주 자동 차단.
+- **Turn 간 state 잔존 버그 수정** (`4c81869`): 이전 턴 답변이 다음 턴에 누출되던 결함. main.py invoke 시 출력 필드 명시 리셋 + `route_after_qa_lookup` 술어 변경.
+- **응답 포맷 버그 수정** (`6d58e70`): gemini-3-flash thinking 모드의 list-blocks 응답이 raw repr 로 노출되던 결함. `extract_text_content` 일괄 적용.
+- **출처 snippet 200자 잘림 제거** (`6d58e70`): chunk 전체가 출처 보기에 표시되도록 backend slicing 제거.
+
+### Frontend / UI
+- **Genesis 디자인 시스템 전면 적용** (`d4673e8`): Pretendard + General Sans + JetBrains Mono. 인디고 #6366F1 / 그린 #20970B / 라이트 그레이 #FAFAFA. 12px card radius, 6px button/input radius, backdrop-blur 네비.
+- **시스템 정체성 명시** (`67db7c0`): 채팅 시작 메시지에 "사내 지식 정보 관리 시스템 — 정보 검색 외 요청은 정확도 보장하지 않음" 안내.
+- **suggestion chip 제거** (`691b2f2`): RFP 작성 같은 시스템 범위 외 의도 유도 차단.
+- **출처 표시 강화** (chat.js): doc_id, location, score 노출 (사용자 검증 가능성).
+
+### Infrastructure
+- **ECS 다운사이징** (`0d65c82`): CPU 2048 → 1024, Memory 4096 → 3072. 실측 max CPU 50%·Memory 41% 기준 안전 마진 확보.
+- **GitOps 적용** (`1602e1f`): `deploy.yml` 이 `infrastructure/ecs-task-definition.json` 을 source-of-truth 로 사용. 이전엔 운영 task def 를 가져와 image 만 교체 → 파일 변경 자동 반영 안 됨.
+- **FARGATE_SPOT + Scheduled Scaling** (Work Order Phase 5, 2026-05-11): -70% Spot 할인 + 평일 KST 08:20~18:00 가동. 월 비용 $66 → $22 (-67%).
+- **AWS Compute Optimizer 권장 (256/1024) 보다 보수적**: bge-reranker 모델 ~570MB + Python runtime 고려해 Memory 3072 유지.
+
+### 인프라 IAM
+- **GitHub Actions deployer IAM 정책 추가** (`bae0aba`): App Runner → ECS Fargate 마이그레이션 후 ECS 권한 누락 결함 해소. ecs:Describe/Register/Update + iam:PassRole.
+
+---
+
+## 운영 정책 (현재)
+
+| 항목 | 값 |
+|---|---|
+| 운영 시간 | 평일 KST 08:20 ~ 18:00 (자동 wake/sleep) |
+| 야간·주말 | 서비스 일시 중지 (수동 wake 가능) |
+| 부팅 시간 | wake 후 ~6분 (모델 로딩 + S3 ingest) |
+| Spot interruption | 월 1~2회 가능, 자동 재기동 ~5분 |
+| 외부 노출 | HTTP 만 (HTTPS 미적용, 도메인 결정 시 검토) |
+| 월 비용 | ~$22 (Fargate $4 + ALB $18) |
+
+> **하반기 정식 오픈 시 24/7 복귀 + 도메인 + Cloudflare Tunnel + HTTPS 도입 예정**.
+
+---
+
 ## 개요
 
 사내 임직원을 위한 AI 어시스턴트 웹 애플리케이션입니다.
@@ -49,13 +92,13 @@
 
 | 기능 | 설명 |
 |---|---|
-| **사내 문서 검색 (Agentic RAG)** | Hybrid retrieval (Chroma + BM25 + 한국어 형태소 분석) → cross-encoder reranker (`bge-reranker-v2-m3`) → grader threshold filtering → generator → reflection self-check → replan loop |
+| **사내 문서 검색 (Agentic RAG)** | Hybrid retrieval (Chroma + BM25 + 한국어 형태소 분석, top 20 후보) → cross-encoder reranker (`bge-reranker-v2-m3`) → grader threshold filtering → generator → reflection self-check |
 | **Q&A Cache** | 평가셋 라벨 기반 별도 ChromaDB collection — 자주 묻는 질문의 즉시 응답으로 LLM 호출·레이턴시 절감 |
 | **파일 분석 (file_chat)** | PDF·DOCX·XLSX·PPTX·TXT 첨부파일 텍스트 추출 후 system prompt에 직접 주입하여 Q&A |
 | **기능 안내 (ai_guide)** | 인사·메타 질의에 대한 짧은 안내 |
 | **Question type 분류** | exact_phrase / numerical / list_n / fill_blank / reasoning / comparison — 각 type별 generator prompt 분기 |
 | **Multi-hop retrieval** | 복합 질문을 sub-questions로 분해해 multi-query 검색 후 종합 |
-| **Self-correction loop** | grader fail → query rewrite (최대 3회) / reflection fail → replan reset → router 회귀 (최대 1회) |
+| **Self-correction loop** | grader fail (kept=0) → doc-aware query rewrite (1회 한도) — 사내 문서 카탈로그(`doc_summary` + `key_terms`) 참조하여 코퍼스 어휘 격차 해소. **replan 메커니즘은 폐기** (효용 대비 응답 시간 부담 큼) |
 | **프롬프트 인젝션 방어** | 그래프 진입점 (`security_gate`)에서 임베딩 유사도 + 슬라이딩 윈도우 기반 차단 |
 
 ---
@@ -109,26 +152,21 @@ START
   [generate_subgraph] — generator + reflection
       │
       ▼
-  verification.passed?
-      ├─(pass)→ END
-      └─(fail + replan_iterations < 1)
-            │
-            ▼
-        [replan_reset] — retrieved_docs/answer/verification 초기화, replan_iterations++
-            │
-            └─→ [router] (재계획)
+     END
+     (replan 분기 폐기 — verification 결과는 응답 메타에 부착됨)
 ```
 
 ### Retrieve subgraph
 
 ```
-[retrieve] (Chroma + BM25 hybrid via RRF)
+[retrieve] (Chroma + BM25 hybrid via RRF, top 20 후보)
   → [grader] — cross-encoder reranker score → relevant / partial / irrelevant 분류
        ├─(kept >= 1)→ exit
-       └─(kept = 0 && retrieval_iterations < 3)
-              ├─→ [rewrite] — LLM query rewrite with negative feedback
+       └─(kept = 0 && retrieval_iterations < 1)
+              ├─→ [rewrite] — doc-aware LLM query rewrite
+              │       (사내 문서 카탈로그 doc_summary + key_terms 참조)
               │      └─→ [retrieve] (loop)
-              └─(kept = 0 && retrieval_iterations >= 3)→ exit (no_docs)
+              └─(kept = 0 && retrieval_iterations >= 1)→ exit (no_docs)
 ```
 
 ### Generate subgraph
@@ -182,8 +220,8 @@ START
 | `citations` | List[Citation] | generator가 부착한 출처 |
 | `answer` | str | generator 출력 |
 | `verification` | VerificationResult | reflection 결과 (groundedness/relevance/hallucination_risk/passed) |
-| `retrieval_iterations` | int | rewrite loop 카운트 (상한 3) |
-| `replan_iterations` | int | replan loop 카운트 (상한 1) |
+| `retrieval_iterations` | int | rewrite loop 카운트 (상한 **1**, 이전 3에서 축소) |
+| `replan_iterations` | int | (deprecated) replan 분기 폐기됨, 필드만 유지 |
 | `llm_call_count` | int | LLM 호출 누적 |
 | `decision_path` | List[str] | 노드 진입 trace (Annotated[..., add] 누적) |
 | `messages` | Sequence[BaseMessage] | 대화 히스토리 (add_messages 누적) |
@@ -234,7 +272,10 @@ Langgraph-AI/
 │   │   ├── ingest.py                  # S3 → Chroma 인제스트
 │   │   ├── qa_cache.py                # Q&A cache (별도 collection)
 │   │   └── chunking/
-│   │       └── extractors/            # PDF/DOCX/PPTX/XLSX/TXT extractors
+│   │       ├── doc_topic_classifier.py    # LLM 기반 문서 주제 분류 (11종 라벨)
+│   │       ├── doc_summary_classifier.py  # LLM 기반 doc_summary + key_terms (rewrite 카탈로그 원천)
+│   │       ├── tagger.py                  # chunk 메타 부착 (entities/topic/summary 상속)
+│   │       └── extractors/                # PDF/DOCX/PPTX/XLSX/TXT extractors
 │   └── security/                      # injection_detector, content_sanitizer 등
 │
 ├── eval/                              # 평가 도구
@@ -354,14 +395,17 @@ RERANK_MAX_LENGTH=512
 
 ## DevOps 플로우
 
-### 인프라 (최초 1회)
+### 인프라 (현재 운영)
 
 ```
 AWS Console / CLI
   ├── Amazon ECR              — Docker 이미지 레포지토리
   ├── Amazon ECS Fargate      — 클러스터 + 서비스 + task definition
+  │                              CPU 1024 / Memory 3072 (다운사이징 적용)
+  │                              Capacity Provider: FARGATE_SPOT (-70% 할인)
+  │                              Application Auto Scaling: 평일 KST 08:20~18:00
   ├── Amazon EFS              — Chroma DB 영속 스토리지
-  ├── Application Load Balancer — HTTPS 종단
+  ├── Application Load Balancer — HTTP 종단 (HTTPS 미적용, 도메인 결정 시 검토)
   ├── Amazon DynamoDB         — langgraph_users, langgraph_checkpoints
   ├── Amazon S3               — 사내 문서 원본
   └── AWS Secrets Manager     — Gemini API key, session secret
@@ -373,9 +417,13 @@ GitHub Secrets
   ├── ECR_REPOSITORY
   ├── ECS_CLUSTER
   └── ECS_SERVICE
+
+IAM
+  └── github-actions-deployer (inline policy: GithubActionsEcsDeployPolicy)
+       — ECR push + ECS describe/register/update + iam:PassRole (task roles)
 ```
 
-### CI/CD (`.github/workflows/deploy.yml`)
+### CI/CD (`.github/workflows/deploy.yml`) — GitOps 패턴
 
 `main` 브랜치 push 시 자동:
 
@@ -384,9 +432,14 @@ GitHub Secrets
 2. ECR 로그인
 3. Docker 이미지 빌드 (cross-encoder 모델 사전 bake)
 4. ECR 푸시 (커밋 SHA 태그 + latest)
-5. ECS task definition 업데이트
+5. infrastructure/ecs-task-definition.json 을 source-of-truth 로 사용
+   → image 필드만 신규 ECR tag 로 교체
+   → 새 task def revision 등록 (env vars / cpu / memory 등 모두 file 기반)
 6. ECS service update-service → 신규 task 배포
 ```
+
+> **중요**: `infrastructure/ecs-task-definition.json` 이 운영 형상관리 파일.
+> CPU·Memory·환경변수·secrets 변경은 이 파일 수정 + push 만으로 자동 반영.
 
 ### 컨테이너 기동 시
 
@@ -395,8 +448,26 @@ FastAPI 앱 시작 (main.py)
   ├── DynamoDB checkpointer 초기화
   ├── intent_samples seed upsert
   ├── S3 → Chroma 인제스트 (AUTO_INGEST=1, 변경 분만)
+  │     ├── doc_topic 분류 (LLM 1회/문서)
+  │     └── doc_summary + key_terms 분류 (LLM 1회/문서)
   ├── Cross-encoder reranker 사전 로드 (Dockerfile에서 bake됨)
   └── FastAPI 서버 ready (port 8080)
+```
+
+### 비용 최적화 (2026-05 적용)
+
+```
+변경 전: ~$66/월 (CPU 2048 + Mem 4096, On-Demand 24/7)
+변경 후: ~$22/월 (-67%)
+   ├── Fargate 다운사이징: CPU 1024 + Mem 3072
+   ├── Capacity Provider: FARGATE_SPOT (-70%)
+   └── Scheduled Scaling: 평일 KST 08:20~18:00 (-72% 가동시간)
+
+연 절감: ~$528
+
+향후 검토 (도메인 결정 시):
+   ├── Cloudflare Tunnel 도입 → ALB 폐기 (월 추가 -$18)
+   └── 최종 목표: ~$5/월 (-92% 대비 원래)
 ```
 
 ### 로컬 개발
